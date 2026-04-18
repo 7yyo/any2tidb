@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Component
@@ -76,15 +77,17 @@ public class SchemaConverter {
         }
 
         // Unique constraints
-        for (String uniqueCols : table.getUniqueConstraintColumns()) {
-            List<String> cols = List.of(uniqueCols.split(","));
-            parts.add("  UNIQUE KEY (" + quoteCols(cols) + ")");
+        for (Map.Entry<String, String> uc : table.getUniqueConstraints().entrySet()) {
+            List<String> cols = List.of(uc.getValue().split(","));
+            parts.add("  UNIQUE KEY `" + uc.getKey() + "` (" + quoteCols(cols) + ")");
         }
 
         // Check constraints
         for (String check : table.getCheckConstraints()) {
             String expr = check.trim();
             if (expr.startsWith("(") && expr.endsWith(")")) expr = expr.substring(1, expr.length() - 1);
+            // Convert SQL Server [colname] bracket quoting to TiDB `colname` backtick quoting
+            expr = expr.replaceAll("\\[([^]]+)]", "`$1`");
             parts.add("  CHECK (" + expr + ")");
             result.addWarning("CHECK constraint included — requires TiDB 8.0+");
         }

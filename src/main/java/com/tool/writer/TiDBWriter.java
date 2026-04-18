@@ -15,7 +15,9 @@ public class TiDBWriter {
      * Each statement is executed individually.
      */
     public void executeDDL(Connection conn, String ddl, ConversionResult result) {
-        String[] statements = ddl.split(";");
+        // Split on ";\n" to avoid breaking COMMENT values that contain bare semicolons.
+        // SchemaConverter always terminates each statement with ";\n".
+        String[] statements = ddl.split(";\n");
         try (Statement stmt = conn.createStatement()) {
             for (String raw : statements) {
                 String sql = raw.trim();

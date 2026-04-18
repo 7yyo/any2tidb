@@ -48,7 +48,7 @@ public class SqlServerExtractor {
         table.setColumns(extractColumns(conn, schemaName, tableName));
         table.setPrimaryKeyColumns(extractPrimaryKey(conn, schemaName, tableName));
         table.setCheckConstraints(extractCheckConstraints(conn, schemaName, tableName));
-        table.setUniqueConstraintColumns(extractUniqueConstraints(conn, schemaName, tableName));
+        table.setUniqueConstraints(extractUniqueConstraints(conn, schemaName, tableName));
         table.setIndexes(extractIndexes(conn, schemaName, tableName));
         table.setForeignKeyCount(countForeignKeys(conn, schemaName, tableName));
         table.setPartitioned(isPartitioned(conn, schemaName, tableName));
@@ -137,7 +137,7 @@ public class SqlServerExtractor {
         return checks;
     }
 
-    private List<String> extractUniqueConstraints(Connection conn, String schema, String table) throws SQLException {
+    private Map<String, String> extractUniqueConstraints(Connection conn, String schema, String table) throws SQLException {
         String sql = """
             SELECT i.name AS idx_name,
                    STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY ic.key_ordinal) AS cols
@@ -149,11 +149,11 @@ public class SqlServerExtractor {
             WHERE i.is_unique_constraint = 1 AND s.name = ? AND t.name = ?
             GROUP BY i.name
             """;
-        List<String> result = new ArrayList<>();
+        Map<String, String> result = new LinkedHashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, schema); ps.setString(2, table);
             try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) result.add(rs.getString("cols"));
+                while (rs.next()) result.put(rs.getString("idx_name"), rs.getString("cols"));
             }
         }
         return result;

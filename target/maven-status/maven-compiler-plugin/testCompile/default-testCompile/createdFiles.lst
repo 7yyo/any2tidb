@@ -1,0 +1,5 @@
+com/tool/converter/SchemaConverterTest.class
+com/tool/integration/IntegrationTest.class
+com/tool/integration/VerifyIntegrationTest.class
+com/tool/converter/TypeMapperTest.class
+com/tool/verifier/SchemaVerifierTest.class

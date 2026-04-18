@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(mvn test *)",
+      "Bash(git -C /home/sev7nyo/ms2tidb add src/main/java/com/tool/converter/TypeMapper.java src/test/java/com/tool/converter/TypeMapperTest.java)",
+      "Bash(git -C /home/sev7nyo/ms2tidb commit -m \"feat: add TypeMapper with full SQL Server to TiDB type mapping\")",
+      "Bash(mvn compile *)",
+      "Bash(git -C /home/sev7nyo/ms2tidb add src/)",
+      "Bash(git -C /home/sev7nyo/ms2tidb commit -m \"feat: add SchemaConverter building TiDB DDL from TableSchema\")",
+      "Bash(git -C /home/sev7nyo/ms2tidb add src/main/java/com/tool/writer/TiDBWriter.java)",
+      "Bash(git -C /home/sev7nyo/ms2tidb commit -m \"feat: add TiDBWriter executing DDL on TiDB\")",
+      "Bash(mvn package *)",
+      "Bash(git -C /home/sev7nyo/ms2tidb add src/main/java/com/tool/App.java)",
+      "Bash(git -C /home/sev7nyo/ms2tidb commit -m \"feat: add App entry point with CLI orchestration and dry-run support\")",
+      "Bash(java -jar /home/sev7nyo/ms2tidb/target/sqlserver-to-tidb-1.0.0.jar --dry-run)",
+      "Bash(sudo dnf *)",
+      "Bash(podman pull *)",
+      "Bash(mysql8.4 *)"
+    ]
+  }
+}

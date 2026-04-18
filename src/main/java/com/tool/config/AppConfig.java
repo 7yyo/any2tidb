@@ -42,7 +42,7 @@ public class AppConfig {
         }
 
         public String tidbJdbcUrl() {
-            return String.format("jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8mb4", host, port, database);
+            return String.format("jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8", host, port, database);
         }
     }
 

@@ -1,0 +1,17 @@
+com/tool/model/TableSchema.class
+com/tool/ConversionResult.class
+com/tool/config/AppConfig.class
+com/tool/App.class
+com/tool/model/IndexSchema.class
+com/tool/converter/TypeMapper$MappedType.class
+com/tool/converter/SchemaConverter.class
+com/tool/converter/TypeMapper.class
+com/tool/verifier/VerifyResult.class
+com/tool/config/AppConfig$DbConfig.class
+com/tool/config/AppConfig$ConvertConfig.class
+com/tool/model/ColumnSchema.class
+com/tool/verifier/SchemaVerifier.class
+com/tool/ConversionResult$Status.class
+com/tool/App$1.class
+com/tool/extractor/SqlServerExtractor.class
+com/tool/writer/TiDBWriter.class

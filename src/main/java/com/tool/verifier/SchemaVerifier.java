@@ -93,12 +93,14 @@ public class SchemaVerifier {
 
         // ---- TiDB 侧（JDBC DatabaseMetaData） ----
         DatabaseMetaData meta = tidbConn.getMetaData();
+        // TiDB/MySQL uses catalog (= database name) to scope queries; null means all databases
+        String catalog = tidbConn.getCatalog();
 
         int tidbCols = 0;
         Set<String> tidbColNames = new LinkedHashSet<>();
         int tidbNotNull = 0;
         String tidbAiCol = null;
-        try (ResultSet rs = meta.getColumns(null, null, tableName, null)) {
+        try (ResultSet rs = meta.getColumns(catalog, null, tableName, null)) {
             while (rs.next()) {
                 tidbCols++;
                 tidbColNames.add(rs.getString("COLUMN_NAME"));
@@ -110,7 +112,7 @@ public class SchemaVerifier {
         List<String> tidbPkCols = new ArrayList<>();
         // getPrimaryKeys 结果无序，需按 KEY_SEQ 排序
         Map<Short, String> pkMap = new TreeMap<>();
-        try (ResultSet rs = meta.getPrimaryKeys(null, null, tableName)) {
+        try (ResultSet rs = meta.getPrimaryKeys(catalog, null, tableName)) {
             while (rs.next()) {
                 pkMap.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
             }
@@ -118,7 +120,7 @@ public class SchemaVerifier {
         tidbPkCols.addAll(pkMap.values());
 
         Set<String> idxNames = new HashSet<>();
-        try (ResultSet rs = meta.getIndexInfo(null, null, tableName, false, false)) {
+        try (ResultSet rs = meta.getIndexInfo(catalog, null, tableName, false, false)) {
             while (rs.next()) {
                 String name = rs.getString("INDEX_NAME");
                 if (name != null && !name.equalsIgnoreCase("PRIMARY")) idxNames.add(name);

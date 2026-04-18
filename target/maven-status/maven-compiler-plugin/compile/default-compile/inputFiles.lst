@@ -1,0 +1,12 @@
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/config/AppConfig.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/model/IndexSchema.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/converter/TypeMapper.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/extractor/SqlServerExtractor.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/writer/TiDBWriter.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/verifier/SchemaVerifier.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/converter/SchemaConverter.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/model/ColumnSchema.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/model/TableSchema.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/verifier/VerifyResult.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/App.java
+/home/sev7nyo/ms2tidb/src/main/java/com/tool/ConversionResult.java

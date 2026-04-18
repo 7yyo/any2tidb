@@ -1,7 +1,9 @@
 package com.tool.model;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class TableSchema {
     private String schemaName;      // e.g. "dbo"
@@ -9,7 +11,7 @@ public class TableSchema {
     private List<ColumnSchema> columns = new ArrayList<>();
     private List<String> primaryKeyColumns = new ArrayList<>();
     private List<String> checkConstraints = new ArrayList<>();  // raw CHECK expressions
-    private List<String> uniqueConstraintColumns = new ArrayList<>();  // each entry = one UNIQUE constraint column list CSV
+    private Map<String, String> uniqueConstraints = new LinkedHashMap<>();  // constraintName -> CSV of column names
     private List<IndexSchema> indexes = new ArrayList<>();
     private boolean partitioned = false;
     private int foreignKeyCount = 0;
@@ -26,8 +28,8 @@ public class TableSchema {
     public void setPrimaryKeyColumns(List<String> primaryKeyColumns) { this.primaryKeyColumns = primaryKeyColumns; }
     public List<String> getCheckConstraints() { return checkConstraints; }
     public void setCheckConstraints(List<String> checkConstraints) { this.checkConstraints = checkConstraints; }
-    public List<String> getUniqueConstraintColumns() { return uniqueConstraintColumns; }
-    public void setUniqueConstraintColumns(List<String> uniqueConstraintColumns) { this.uniqueConstraintColumns = uniqueConstraintColumns; }
+    public Map<String, String> getUniqueConstraints() { return uniqueConstraints; }
+    public void setUniqueConstraints(Map<String, String> uniqueConstraints) { this.uniqueConstraints = uniqueConstraints; }
     public List<IndexSchema> getIndexes() { return indexes; }
     public void setIndexes(List<IndexSchema> indexes) { this.indexes = indexes; }
     public boolean isPartitioned() { return partitioned; }

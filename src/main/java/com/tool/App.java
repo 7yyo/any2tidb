@@ -60,25 +60,19 @@ public class App implements ApplicationRunner {
         boolean continueOnError = config.getConvert().isContinueOnError();
 
         log("INFO", "Connecting to SQL Server...");
+        int[] failedRef = {0};
         try (Connection ssConn = DriverManager.getConnection(
                 config.getSqlserver().sqlServerJdbcUrl(),
                 config.getSqlserver().getUsername(),
-                config.getSqlserver().getPassword())) {
-
-            Connection tidbConn = null;
-            if (!dryRun) {
-                log("INFO", "Connecting to TiDB...");
-                tidbConn = DriverManager.getConnection(
-                        config.getTidb().tidbJdbcUrl(),
-                        config.getTidb().getUsername(),
-                        config.getTidb().getPassword());
-            }
+                config.getSqlserver().getPassword());
+             Connection tidbConn = dryRun ? null : openTiDB()) {
 
             List<String[]> tableList = extractor.listTables(ssConn, schemas, tables);
             log("INFO", "Starting conversion, found " + tableList.size() + " tables");
 
             int succeeded = 0, warned = 0, failed = 0;
             List<String[]> succeededTables = new ArrayList<>();
+            boolean stopEarly = false;
 
             for (int i = 0; i < tableList.size(); i++) {
                 String[] entry = tableList.get(i);
@@ -110,12 +104,11 @@ public class App implements ApplicationRunner {
                     case ERROR -> {
                         log("ERROR", progress + " Converting table " + fullName + " ... " + result.getErrorMessage());
                         failed++;
-                        if (!continueOnError) break;
+                        if (!continueOnError) { stopEarly = true; }
                     }
                 }
+                if (stopEarly) break;
             }
-
-            if (tidbConn != null) tidbConn.close();
 
             log("INFO", "Conversion completed: " + succeeded + " succeeded, " + warned + " warnings, " + failed + " failed");
 
@@ -124,8 +117,18 @@ public class App implements ApplicationRunner {
                 printVerifyTable(tidbConn, ssConn, succeededTables);
             }
 
-            if (failed > 0) System.exit(1);
+            failedRef[0] = failed;
         }
+        // Exit after connections are closed (try-with-resources has already cleaned up)
+        if (failedRef[0] > 0) System.exit(1);
+    }
+
+    private Connection openTiDB() throws Exception {
+        log("INFO", "Connecting to TiDB...");
+        return DriverManager.getConnection(
+                config.getTidb().tidbJdbcUrl(),
+                config.getTidb().getUsername(),
+                config.getTidb().getPassword());
     }
 
     private void printVerifyTable(Connection tidbConn, Connection msConn, List<String[]> tables) {
