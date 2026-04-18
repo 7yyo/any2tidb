@@ -1,0 +1,19 @@
+sqlserver:
+  host: 127.0.0.1
+  port: 1433
+  database: mydb
+  username: sa
+  password: yourpassword
+
+tidb:
+  host: 127.0.0.1
+  port: 4000
+  database: mydb
+  username: root
+  password: ""
+
+convert:
+  schemas:
+  tables:
+  drop-if-exists: false
+  continue-on-error: true
