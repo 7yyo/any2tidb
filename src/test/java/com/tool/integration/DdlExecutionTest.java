@@ -74,6 +74,25 @@ class DdlExecutionTest {
         return c;
     }
 
+    private ColumnSchema colDefault(String name, String type, boolean nullable, String defaultValue) {
+        ColumnSchema c = col(name, type, nullable);
+        c.setDefaultValue(defaultValue);
+        return c;
+    }
+
+    private ColumnSchema colDefaultScale(String name, String type, int scale, boolean nullable, String defaultValue) {
+        ColumnSchema c = col(name, type, nullable);
+        c.setScale(scale);
+        c.setDefaultValue(defaultValue);
+        return c;
+    }
+
+    private ColumnSchema colDefaultLen(String name, String type, int maxLength, boolean nullable, String defaultValue) {
+        ColumnSchema c = colLen(name, type, maxLength, nullable);
+        c.setDefaultValue(defaultValue);
+        return c;
+    }
+
     private TableSchema table(String tableName, List<ColumnSchema> cols, List<String> pk) {
         TableSchema t = new TableSchema();
         t.setSchemaName("dbo"); t.setTableName(tableName);
@@ -546,6 +565,35 @@ class DdlExecutionTest {
             String remarks = rs.getString("REMARKS");
             assertNotNull(remarks, "status column should have REMARKS/COMMENT");
             assertTrue(remarks.contains("inactive"), "COMMENT should be stored, got: " + remarks);
+        }
+        drop(tn);
+    }
+
+    /**
+     * DE20: Regression — DATETIME(3) + GETDATE() default must generate
+     * CURRENT_TIMESTAMP(3), not bare CURRENT_TIMESTAMP.
+     * TiDB rejects precision mismatch with Error 1067.
+     */
+    @Test @Order(20)
+    void de20_datetime3WithGetdateDefault_precisionMatched() throws Exception {
+        String tn = "de_dt3_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema created = colDefaultScale("created_at", "datetime2", 3, false, "(getdate())");
+
+        TableSchema t = table(tn, List.of(id, created), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATETIME(3) + GETDATE() should not produce Error 1067, got: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+
+        // Verify TiDB stored the default
+        try (ResultSet rs = tidbConn.getMetaData().getColumns(null, null, tn, "created_at")) {
+            assertTrue(rs.next());
+            String def = rs.getString("COLUMN_DEF");
+            assertNotNull(def, "created_at must have a DEFAULT");
+            assertTrue(def.toUpperCase().contains("CURRENT_TIMESTAMP"),
+                    "DEFAULT should be CURRENT_TIMESTAMP variant, got: " + def);
         }
         drop(tn);
     }
