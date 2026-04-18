@@ -64,6 +64,9 @@ public class SchemaConverter {
                             + rawDefault.trim() + "' translated to '" + defaultVal + "' — verify semantics");
                 }
             }
+            if (col.getComment() != null && !col.getComment().isBlank()) {
+                colDef.append(" COMMENT '").append(col.getComment().replace("'", "''")).append("'");
+            }
             parts.add(colDef.toString());
         }
 

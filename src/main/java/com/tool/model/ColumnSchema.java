@@ -9,6 +9,7 @@ public class ColumnSchema {
     private boolean nullable;
     private String defaultValue;    // raw default expression from SQL Server
     private boolean identity;       // AUTO_INCREMENT equivalent
+    private String comment;         // MS_Description extended property
 
     public ColumnSchema() {}
 
@@ -28,4 +29,6 @@ public class ColumnSchema {
     public void setDefaultValue(String defaultValue) { this.defaultValue = defaultValue; }
     public boolean isIdentity() { return identity; }
     public void setIdentity(boolean identity) { this.identity = identity; }
+    public String getComment() { return comment; }
+    public void setComment(String comment) { this.comment = comment; }
 }

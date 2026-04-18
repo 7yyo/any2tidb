@@ -60,12 +60,15 @@ public class SqlServerExtractor {
             SELECT c.name, tp.name AS type_name,
                    c.max_length, c.precision, c.scale,
                    c.is_nullable, c.is_identity,
-                   dc.definition AS default_value
+                   dc.definition AS default_value,
+                   CAST(ep.value AS NVARCHAR(4000)) AS comment
             FROM sys.columns c
             JOIN sys.types tp ON c.user_type_id = tp.user_type_id
             JOIN sys.tables t ON c.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+            LEFT JOIN sys.extended_properties ep ON ep.major_id = c.object_id AND ep.minor_id = c.column_id
+                AND ep.class = 1 AND ep.name = 'MS_Description'
             WHERE s.name = ? AND t.name = ?
             ORDER BY c.column_id
             """;
@@ -87,6 +90,7 @@ public class SqlServerExtractor {
                     col.setNullable(rs.getBoolean("is_nullable"));
                     col.setIdentity(rs.getBoolean("is_identity"));
                     col.setDefaultValue(rs.getString("default_value"));
+                    col.setComment(rs.getString("comment"));
                     cols.add(col);
                 }
             }
