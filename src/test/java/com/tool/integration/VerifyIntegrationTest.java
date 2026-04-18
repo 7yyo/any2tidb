@@ -99,7 +99,6 @@ class VerifyIntegrationTest {
         assertEquals(List.of("id"), r.tidbPkCols());
         assertEquals(1, r.msIdx());
         assertEquals(1, r.tidbIdx());
-        assertEquals(0, r.msFk());
         assertEquals("id", r.msAiCol());
         assertEquals("id", r.tidbAiCol());
 
@@ -152,7 +151,7 @@ class VerifyIntegrationTest {
         migrate("vt_fk_child");
 
         VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", "vt_fk_child");
-        assertEquals(1, r.msFk(), "MS 侧应有 1 个外键");
+        // FK is discarded during migration — not tracked in VerifyResult anymore
         assertFalse(r.isMismatch(), "外键不参与 MISMATCH 判定");
 
         dropSSTable("vt_fk_child"); dropSSTable("vt_fk_parent");
@@ -179,5 +178,112 @@ class VerifyIntegrationTest {
 
         dropSSTable(t1); dropSSTable(t2);
         dropTiDBTable(t1); dropTiDBTable(t2);
+    }
+
+    /**
+     * VT05: extra index in TiDB does NOT exist after migration but missing index → MISMATCH
+     * (simulate by dropping an index from TiDB after migration)
+     */
+    @Test
+    @Order(5)
+    void vt05_missingIndexInTidb_isMismatch() throws Exception {
+        String t = "vt_miss_idx";
+        dropSSTable(t); dropTiDBTable(t);
+        executeSS("""
+            CREATE TABLE dbo.vt_miss_idx (
+                id   INT NOT NULL PRIMARY KEY,
+                code VARCHAR(50)
+            );
+            CREATE INDEX IX_vt_miss_code ON dbo.vt_miss_idx (code);
+            """);
+        migrate(t);
+        // Remove the index from TiDB to simulate mismatch
+        executeTiDB("DROP INDEX `IX_vt_miss_code` ON `" + t + "`");
+
+        VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", t);
+        assertTrue(r.isMismatch(), "Missing index should cause mismatch, diffLines=" + r.diffLines());
+        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("idx mismatch")));
+
+        dropSSTable(t); dropTiDBTable(t);
+    }
+
+    /**
+     * VT06: PK columns mismatch → MISMATCH with "pk mismatch" message
+     * Simulate by re-creating TiDB table with different PK.
+     */
+    @Test
+    @Order(6)
+    void vt06_pkMismatch_isMismatch() throws Exception {
+        String t = "vt_pk_diff";
+        dropSSTable(t); dropTiDBTable(t);
+        executeSS("""
+            CREATE TABLE dbo.vt_pk_diff (
+                a INT NOT NULL,
+                b INT NOT NULL,
+                val VARCHAR(50),
+                CONSTRAINT PK_vt_pk PRIMARY KEY (a, b)
+            )
+            """);
+        migrate(t);
+        // Rebuild TiDB table with only single-col PK
+        executeTiDB("DROP TABLE `" + t + "`");
+        executeTiDB("CREATE TABLE `" + t + "` (`a` INT NOT NULL, `b` INT NOT NULL, `val` VARCHAR(50), PRIMARY KEY (`a`))");
+
+        VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", t);
+        assertTrue(r.isMismatch());
+        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("pk mismatch")));
+
+        dropSSTable(t); dropTiDBTable(t);
+    }
+
+    /**
+     * VT07: NOT NULL count mismatch → MISMATCH with "notnull mismatch" message
+     */
+    @Test
+    @Order(7)
+    void vt07_notNullMismatch_isMismatch() throws Exception {
+        String t = "vt_notnull";
+        dropSSTable(t); dropTiDBTable(t);
+        executeSS("""
+            CREATE TABLE dbo.vt_notnull (
+                id   INT NOT NULL PRIMARY KEY,
+                name VARCHAR(50) NOT NULL
+            )
+            """);
+        migrate(t);
+        // Make a NOT NULL column nullable in TiDB
+        executeTiDB("ALTER TABLE `" + t + "` MODIFY `name` VARCHAR(50) NULL");
+
+        VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", t);
+        assertTrue(r.isMismatch());
+        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("notnull mismatch")));
+
+        dropSSTable(t); dropTiDBTable(t);
+    }
+
+    /**
+     * VT08: AI (AUTO_INCREMENT) column mismatch → MISMATCH with "ai mismatch"
+     */
+    @Test
+    @Order(8)
+    void vt08_aiMismatch_isMismatch() throws Exception {
+        String t = "vt_ai_diff";
+        dropSSTable(t); dropTiDBTable(t);
+        executeSS("""
+            CREATE TABLE dbo.vt_ai_diff (
+                id  INT NOT NULL IDENTITY(1,1) PRIMARY KEY,
+                val VARCHAR(50)
+            )
+            """);
+        migrate(t);
+        // Drop AUTO_INCREMENT from TiDB column (requires session variable)
+        executeTiDB("SET @@tidb_allow_remove_auto_inc = 1");
+        executeTiDB("ALTER TABLE `" + t + "` MODIFY `id` INT NOT NULL");
+
+        VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", t);
+        assertTrue(r.isMismatch());
+        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("ai mismatch")));
+
+        dropSSTable(t); dropTiDBTable(t);
     }
 }

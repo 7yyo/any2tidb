@@ -316,8 +316,11 @@ class IntegrationTest {
         ConversionResult result = migrate(t, false);
         assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("partitioned")),
                 "分区表应有 WARN");
-        // 表结构迁移成功
-        assertFalse(tidbColumns(t).isEmpty(), "TiDB 表应存在");
+        // 表结构迁移成功，验证列存在
+        Map<String, String> cols = tidbColumns(t);
+        assertFalse(cols.isEmpty(), "TiDB 表应存在");
+        assertEquals("INT", cols.get("id"));
+        assertEquals("VARCHAR", cols.get("val"));
 
         dropSSTable(t); dropTiDBTable(t);
         try { executeSS("DROP PARTITION SCHEME ps_int"); } catch (SQLException ignored) {}
@@ -344,6 +347,10 @@ class IntegrationTest {
         ConversionResult result2 = migrate(t, true);
         assertNotEquals(ConversionResult.Status.ERROR, result2.getStatus(),
                 "dropIfExists 模式重复迁移不应报错");
+        // 验证表结构完整
+        Map<String, String> cols2 = tidbColumns(t);
+        assertEquals("INT", cols2.get("id"));
+        assertEquals("VARCHAR", cols2.get("val"));
 
         dropSSTable(t); dropTiDBTable(t);
     }
