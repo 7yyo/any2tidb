@@ -54,9 +54,15 @@ public class SchemaConverter {
             if (!col.isNullable()) colDef.append(" NOT NULL");
             if (col.isIdentity()) colDef.append(" AUTO_INCREMENT");
 
-            String defaultVal = typeMapper.mapDefaultValue(col.getDefaultValue());
+            String rawDefault = col.getDefaultValue();
+            String defaultVal = typeMapper.mapDefaultValue(rawDefault);
             if (defaultVal != null && !col.isIdentity()) {
                 colDef.append(" DEFAULT ").append(defaultVal);
+                // Warn if the original default was a function call that required translation
+                if (rawDefault != null && rawDefault.contains("(")) {
+                    result.addWarning("column '" + col.getName() + "': default value '"
+                            + rawDefault.trim() + "' translated to '" + defaultVal + "' — verify semantics");
+                }
             }
             parts.add(colDef.toString());
         }
