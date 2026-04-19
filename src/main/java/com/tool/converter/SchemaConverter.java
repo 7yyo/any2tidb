@@ -83,6 +83,9 @@ public class SchemaConverter {
                     result.addWarning("column '" + col.getName() + "': TIME column default '" + rawDefault
                             + "' cannot be expressed as a TiDB function default — default dropped");
                     defaultVal = null;
+                } else if (tidbType.equals("DATETIME") && defaultVal != null && defaultVal.startsWith("CURRENT_TIMESTAMP(")) {
+                    // DATETIME (no precision) cannot use CURRENT_TIMESTAMP(n); strip precision
+                    defaultVal = "CURRENT_TIMESTAMP";
                 }
             }
             if (defaultVal != null && !col.isIdentity()) {

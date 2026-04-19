@@ -297,4 +297,16 @@ class SchemaConverterTest {
         assertFalse(ddl.contains("CURTIME()"),
                 "TIME column must not use CURTIME() as TiDB rejects it, got: " + ddl);
     }
+
+    @Test
+    void datetimeColumn_sysdatetimeDefault_stripsToCurrentTimestamp() {
+        TableSchema t = twoColTable("logged_at", "datetime", "(SYSDATETIME())");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("DEFAULT CURRENT_TIMESTAMP"),
+                "DATETIME column with SYSDATETIME() should emit CURRENT_TIMESTAMP (no precision), got: " + ddl);
+        assertFalse(ddl.contains("CURRENT_TIMESTAMP("),
+                "DATETIME (no precision) must not have CURRENT_TIMESTAMP(n), got: " + ddl);
+    }
 }
