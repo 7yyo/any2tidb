@@ -61,7 +61,7 @@ public class SchemaMigrateStep implements MigrationStep {
 
     /** Collects all DDL for one database and writes it to a .sql file. Returns the file path. */
     private Path writeDryRunFile(String dbName, String ddlBlock) throws IOException {
-        String filename = "any2tidb-" + dbName + ".sql";
+        String filename = dbName + ".sql";
         Path out = Path.of(filename);
         try (PrintWriter pw = new PrintWriter(out.toFile(), StandardCharsets.UTF_8)) {
             pw.println("-- any2tidb dry-run  db=" + dbName);
