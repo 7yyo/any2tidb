@@ -644,4 +644,28 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE23: UNIQUEIDENTIFIER + NEWID() default.
+     * TypeMapper maps NEWID() → UUID().
+     * SchemaConverter emits: `guid` VARCHAR(36) DEFAULT UUID()
+     * TiDB in MySQL 8.0 compat mode may require DEFAULT (UUID()).
+     * This test documents whether bare UUID() is accepted.
+     */
+    @Test @Order(23)
+    void de23_uniqueidentifierWithNewidDefault() throws Exception {
+        String tn = "de_guid_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema guid = colDefault("guid", "uniqueidentifier", true, "(NEWID())");
+
+        TableSchema t = table(tn, List.of(id, guid), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "UNIQUEIDENTIFIER + NEWID() default should not produce a fatal DDL error. " +
+                "If TiDB rejected DEFAULT UUID(), SchemaConverter must wrap it as DEFAULT (UUID()). " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
