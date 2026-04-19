@@ -23,7 +23,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @SpringBootApplication
 @EnableConfigurationProperties
@@ -56,7 +55,7 @@ public class App implements ApplicationRunner {
         if (args.containsOption("tables")) {
             String val = args.getOptionValues("tables").get(0);
             tablesOverride = Arrays.stream(val.split(","))
-                    .map(String::trim).collect(Collectors.toList());
+                    .map(String::trim).toList();
         }
 
         // Banner
@@ -69,6 +68,14 @@ public class App implements ApplicationRunner {
                 config.getTarget().getHost() + ":" + config.getTarget().getPort());
         if (dryRun)
             System.out.println("│  mode    │  dry-run                     │");
+        List<String> cfgSchemas = config.getConvert().getSchemas();
+        List<String> cfgTables  = config.getConvert().getTables();
+        if (cfgSchemas != null && !cfgSchemas.isEmpty())
+            System.out.printf("│  schemas │  %-28s│%n", String.join(", ", cfgSchemas));
+        if (cfgTables != null && !cfgTables.isEmpty())
+            System.out.printf("│  tables  │  %-28s│%n", String.join(", ", cfgTables));
+        if (tablesOverride != null && !tablesOverride.isEmpty())
+            System.out.printf("│  tables* │  %-28s│%n", String.join(", ", tablesOverride));
         System.out.println("└──────────┴──────────────────────────────┘");
         System.out.println();
 
