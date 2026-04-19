@@ -690,4 +690,24 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE25: DATETIME2(6) + GETUTCDATE() default → UTC_TIMESTAMP().
+     * Verifies UTC_TIMESTAMP() is accepted as DEFAULT on a DATETIME(6) column.
+     */
+    @Test @Order(25)
+    void de25_datetime6WithGetutcdateDefault() throws Exception {
+        String tn = "de_utcdate_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema ts = colDefaultScale("synced_at", "datetime2", 6, false, "(GETUTCDATE())");
+
+        TableSchema t = table(tn, List.of(id, ts), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATETIME(6) + GETUTCDATE() should not produce a fatal DDL error. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
