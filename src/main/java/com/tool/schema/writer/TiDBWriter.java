@@ -67,12 +67,4 @@ public class TiDBWriter implements SchemaWriter {
             return false;
         }
     }
-
-    /**
-     * Prints DDL to stdout without executing (dry-run mode).
-     */
-    public void printDDL(String tableName, String ddl) {
-        System.out.println("-- DDL for " + tableName);
-        System.out.println(ddl);
-    }
 }

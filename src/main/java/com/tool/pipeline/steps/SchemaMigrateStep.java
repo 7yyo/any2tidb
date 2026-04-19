@@ -13,8 +13,14 @@ import com.tool.schema.converter.SchemaConverter;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.writer.SchemaWriter;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -54,6 +60,23 @@ public class SchemaMigrateStep implements MigrationStep {
 
     @Override
     public String name() { return "SchemaMigrate"; }
+
+    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+
+    /** Collects all DDL for one database and writes it to a .sql file. Returns the file path. */
+    private Path writeDryRunFile(String dbName, String ddlBlock) throws IOException {
+        String filename = "any2tidb-" + dbName + "-" + LocalDateTime.now().format(TS) + ".sql";
+        Path out = Path.of(filename);
+        try (PrintWriter pw = new PrintWriter(out.toFile(), StandardCharsets.UTF_8)) {
+            pw.println("-- any2tidb dry-run  db=" + dbName + "  " + LocalDateTime.now());
+            pw.println("-- Source to TiDB directly: mysql -h host -P 4000 -u root < " + filename);
+            pw.println();
+            pw.println("USE `" + dbName + "`;");
+            pw.println();
+            pw.print(ddlBlock);
+        }
+        return out;
+    }
 
     @Override
     @SuppressWarnings("unchecked")
@@ -107,6 +130,9 @@ public class SchemaMigrateStep implements MigrationStep {
                     stoppedByConflict = dr.conflictStop();
                     break;
                 }
+                if (dryRun && dr.sqlFile() != null) {
+                    System.out.println("[DRY-RUN] " + dbName + " → " + dr.sqlFile());
+                }
             }
         }
 
@@ -124,7 +150,7 @@ public class SchemaMigrateStep implements MigrationStep {
     private record DbResult(
             int failed, int warned, int skipped, boolean stoppedEarly, boolean conflictStop,
             List<String[]> allTables, List<String[]> succeededTables,
-            Map<String, ConversionResult> convResults) {}
+            Map<String, ConversionResult> convResults, Path sqlFile) {}
 
     private DbResult migrateOneDb(Connection ssConn, Connection tidbConn,
                                   String dbName, List<String> schemas, List<String> tables,
@@ -148,7 +174,7 @@ public class SchemaMigrateStep implements MigrationStep {
             System.out.println("[ERROR] Table name conflict in [" + dbName + "] — see any2tidb.log");
             log.log("ERROR", "Table name conflict", "db", dbName);
             conflicts.forEach(line -> log.log("ERROR", "conflict", "tables", line));
-            return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of());
+            return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of(), null);
         }
 
         int total = tableList.size();
@@ -156,6 +182,7 @@ public class SchemaMigrateStep implements MigrationStep {
         List<String[]> succeededTables = new ArrayList<>();
         Map<String, ConversionResult> convResults = new LinkedHashMap<>();
         boolean stopEarly = false;
+        StringBuilder dryRunDdl = dryRun ? new StringBuilder() : null;
 
         for (int i = 0; i < total; i++) {
             String[] entry      = tableList.get(i);
@@ -163,7 +190,7 @@ public class SchemaMigrateStep implements MigrationStep {
             String tableName    = entry[1];
             String fullName     = schemaName + "." + tableName;
 
-            progress.print(dbName, i, total, fullName);
+            if (!dryRun) progress.print(dbName, i, total, fullName);
             ConversionResult result = new ConversionResult(fullName);
 
             try {
@@ -172,7 +199,8 @@ public class SchemaMigrateStep implements MigrationStep {
                 if (ddl == null) {
                     // result already has ERROR set by converter
                 } else if (dryRun) {
-                    writer.printDDL(fullName, ddl);
+                    dryRunDdl.append("-- ").append(fullName).append("\n");
+                    dryRunDdl.append(ddl).append("\n");
                 } else {
                     writer.executeDDL(tidbConn, ddl, result);
                 }
@@ -189,11 +217,19 @@ public class SchemaMigrateStep implements MigrationStep {
             if (stopEarly) break;
         }
 
-        progress.print(dbName, total, total, "");
-        System.out.println();
+        if (!dryRun) {
+            progress.print(dbName, total, total, "");
+            System.out.println();
+        }
+
+        // Write SQL file for dry-run
+        Path sqlFile = null;
+        if (dryRun && dryRunDdl != null && !dryRunDdl.isEmpty()) {
+            sqlFile = writeDryRunFile(dbName, dryRunDdl.toString());
+        }
 
         return new DbResult(failed, warned, skipped, stopEarly, false,
-                tableList, succeededTables, convResults);
+                tableList, succeededTables, convResults, sqlFile);
     }
 
     private Connection openTiDB(String dbName) throws Exception {

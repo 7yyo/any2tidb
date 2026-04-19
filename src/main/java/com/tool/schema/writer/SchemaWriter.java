@@ -12,7 +12,4 @@ import java.sql.Connection;
 public interface SchemaWriter {
     /** Execute the given DDL against {@code conn}; update {@code result} with outcome. */
     void executeDDL(Connection conn, String ddl, ConversionResult result) throws Exception;
-
-    /** Print DDL to stdout (dry-run mode). */
-    void printDDL(String fullName, String ddl);
 }
