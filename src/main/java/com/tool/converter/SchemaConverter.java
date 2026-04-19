@@ -39,13 +39,24 @@ public class SchemaConverter {
 
         List<String> parts = new ArrayList<>();
 
-        // Columns
+        // Columns — first pass: check for any unskippable (skip) columns
+        List<String> skipCols = new ArrayList<>();
         for (ColumnSchema col : table.getColumns()) {
             TypeMapper.MappedType mapped = typeMapper.mapType(col);
-            if (mapped.skip()) {
-                result.addWarning("column '" + col.getName() + "': " + mapped.warningMessage() + " — column skipped");
-                continue;
+            if (mapped.skip()) skipCols.add("'" + col.getName() + "' (" + mapped.warningMessage() + ")");
+        }
+        if (!skipCols.isEmpty()) {
+            result.setError("table skipped — " + skipCols.size() + " column(s) cannot be converted: "
+                    + String.join(", ", skipCols) + ". Manual intervention required.");
+            return null;
+        }
+
+        // Columns — second pass: build column definitions
+        for (ColumnSchema col : table.getColumns()) {
+            if (col.isComputed()) {
+                result.addWarning("column '" + col.getName() + "': computed column (AS expr) converted to plain column — verify definition manually");
             }
+            TypeMapper.MappedType mapped = typeMapper.mapType(col);
             if (mapped.hasWarning()) {
                 result.addWarning("column '" + col.getName() + "': " + mapped.warningMessage());
             }
@@ -57,6 +68,20 @@ public class SchemaConverter {
 
             String rawDefault = col.getDefaultValue();
             String defaultVal = typeMapper.mapDefaultValue(rawDefault);
+            // If the mapped default is CURRENT_TIMESTAMP but the column has explicit precision,
+            // TiDB requires the precision to match: CURRENT_TIMESTAMP(n)
+            if ("CURRENT_TIMESTAMP".equals(defaultVal) && col.getScale() != null && col.getScale() > 0) {
+                defaultVal = "CURRENT_TIMESTAMP(" + col.getScale() + ")";
+            }
+            // TiDB rejects CURRENT_TIMESTAMP on DATE/TIME columns; use date/time-appropriate functions
+            String tidbType = mapped.tidbType().toUpperCase();
+            if ("CURRENT_TIMESTAMP".equals(defaultVal) || (defaultVal != null && defaultVal.startsWith("CURRENT_TIMESTAMP("))) {
+                if (tidbType.equals("DATE")) {
+                    defaultVal = "CURDATE()";
+                } else if (tidbType.equals("TIME")) {
+                    defaultVal = "CURTIME()";
+                }
+            }
             if (defaultVal != null && !col.isIdentity()) {
                 colDef.append(" DEFAULT ").append(defaultVal);
                 // Warn if the original default was a function call that required translation
@@ -82,14 +107,9 @@ public class SchemaConverter {
             parts.add("  UNIQUE KEY `" + uc.getKey() + "` (" + quoteCols(cols) + ")");
         }
 
-        // Check constraints
-        for (String check : table.getCheckConstraints()) {
-            String expr = check.trim();
-            if (expr.startsWith("(") && expr.endsWith(")")) expr = expr.substring(1, expr.length() - 1);
-            // Convert SQL Server [colname] bracket quoting to TiDB `colname` backtick quoting
-            expr = expr.replaceAll("\\[([^]]+)]", "`$1`");
-            parts.add("  CHECK (" + expr + ")");
-            result.addWarning("CHECK constraint included — requires TiDB 8.0+");
+        // Check constraints — TiDB disables check enforcement by default, discard them
+        if (!table.getCheckConstraints().isEmpty()) {
+            result.addWarning(table.getCheckConstraints().size() + " CHECK constraint(s) discarded (TiDB does not enforce CHECK by default)");
         }
 
         sb.append(String.join(",\n", parts));

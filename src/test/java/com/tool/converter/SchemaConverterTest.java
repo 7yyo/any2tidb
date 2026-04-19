@@ -222,6 +222,26 @@ class SchemaConverterTest {
         assertTrue(ddl.contains("COMMENT '0=inactive 1=active'"), "DDL should contain COMMENT clause: " + ddl);
     }
 
+    /**
+     * Regression: DATETIME(3) column with GETDATE() default must generate
+     * DEFAULT CURRENT_TIMESTAMP(3), not DEFAULT CURRENT_TIMESTAMP.
+     * TiDB rejects precision mismatch between column type and default value.
+     */
+    @Test
+    void datetime3WithGetdateDefault_generatesPrecisionMatchedCurrentTimestamp() {
+        TableSchema t = simpleTable();
+        ColumnSchema col = new ColumnSchema();
+        col.setName("created_at"); col.setSqlServerType("datetime2"); col.setScale(3); col.setNullable(false);
+        col.setDefaultValue("(getdate())");
+        t.setColumns(java.util.List.of(t.getColumns().get(0), t.getColumns().get(1), col));
+        ConversionResult result = new ConversionResult("dbo.users");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertTrue(ddl.contains("DEFAULT CURRENT_TIMESTAMP(3)"),
+                "DATETIME(3) with GETDATE default must use CURRENT_TIMESTAMP(3), got: " + ddl);
+        assertFalse(ddl.contains("DEFAULT CURRENT_TIMESTAMP,") || ddl.contains("DEFAULT CURRENT_TIMESTAMP\n"),
+                "Must not emit bare CURRENT_TIMESTAMP when column has precision: " + ddl);
+    }
+
     @Test
     void multipleSkipColumns_errorsWithBothColumnNames() {
         TableSchema t = simpleTable();
@@ -237,5 +257,43 @@ class SchemaConverterTest {
         String errMsg = result.getErrorMessage();
         assertTrue(errMsg.contains("cur1"), "Error should mention first skip col: " + errMsg);
         assertTrue(errMsg.contains("cur2"), "Error should mention second skip col: " + errMsg);
+    }
+
+    private TableSchema twoColTable(String colName, String sqlType, String defaultVal) {
+        TableSchema t = new TableSchema();
+        t.setSchemaName("dbo");
+        t.setTableName("tbl");
+        ColumnSchema id = new ColumnSchema();
+        id.setName("id"); id.setSqlServerType("int"); id.setNullable(false); id.setIdentity(true);
+        ColumnSchema c = new ColumnSchema();
+        c.setName(colName); c.setSqlServerType(sqlType); c.setNullable(true);
+        c.setDefaultValue(defaultVal);
+        t.setColumns(List.of(id, c));
+        t.setPrimaryKeyColumns(List.of("id"));
+        return t;
+    }
+
+    @Test
+    void dateColumn_getdateDefault_emitsCurdate() {
+        TableSchema t = twoColTable("d", "date", "(getdate())");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("CURDATE()"),
+                "DATE column with GETDATE() default should emit CURDATE(), got: " + ddl);
+        assertFalse(ddl.contains("CURRENT_TIMESTAMP"),
+                "DATE column must not have CURRENT_TIMESTAMP default, got: " + ddl);
+    }
+
+    @Test
+    void timeColumn_getdateDefault_emitsCurtime() {
+        TableSchema t = twoColTable("t", "time", "(getdate())");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("CURTIME()"),
+                "TIME column with GETDATE() default should emit CURTIME(), got: " + ddl);
+        assertFalse(ddl.contains("CURRENT_TIMESTAMP"),
+                "TIME column must not have CURRENT_TIMESTAMP default, got: " + ddl);
     }
 }
