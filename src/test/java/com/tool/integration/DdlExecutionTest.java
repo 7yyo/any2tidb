@@ -773,4 +773,35 @@ class DdlExecutionTest {
         }
         drop(tn);
     }
+
+    /**
+     * DE28: String literal defaults — N-prefix handling and empty string.
+     * SQL Server stores: (N'CN') for nvarchar, ('') for empty string.
+     * TypeMapper strips outer parens → N'CN' or ''
+     * Note: N'CN' (with N prefix) may or may not be accepted by TiDB as a default.
+     * This test documents behavior.
+     */
+    @Test @Order(28)
+    void de28_stringLiteralDefaults() throws Exception {
+        String tn = "de_string_defaults";
+        drop(tn);
+        ColumnSchema id      = col("id", "int", false);
+        ColumnSchema country = colDefaultLen("country", "nvarchar", 4, false, "(N'CN')");
+        ColumnSchema code    = colDefaultLen("code",    "varchar",  10, true, "('')");
+
+        TableSchema t = table(tn, List.of(id, country, code), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "String literal defaults (N'CN', '') should execute on TiDB. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+
+        // Verify country default stored
+        try (ResultSet rs = tidbConn.getMetaData().getColumns(null, null, tn, "country")) {
+            assertTrue(rs.next());
+            String def = rs.getString("COLUMN_DEF");
+            assertNotNull(def, "country must have a DEFAULT");
+        }
+        drop(tn);
+    }
 }
