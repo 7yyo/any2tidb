@@ -2,6 +2,7 @@ package com.tool.pipeline;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+import java.util.List;
 
 class MigrationPipelineTest {
 
@@ -43,5 +44,34 @@ class MigrationPipelineTest {
     void stepContext_has_falseForMissing() {
         StepContext ctx = new StepContext();
         assertFalse(ctx.has("nope"));
+    }
+
+    @Test
+    void pipeline_runsStepsInOrder() throws Exception {
+        List<String> log = new java.util.ArrayList<>();
+        MigrationStep s1 = ctx -> { log.add("s1"); return StepResult.ok("step1 done"); };
+        MigrationStep s2 = ctx -> { log.add("s2"); return StepResult.ok("step2 done"); };
+
+        new MigrationPipeline(List.of(s1, s2)).run(new StepContext());
+
+        assertEquals(List.of("s1", "s2"), log);
+    }
+
+    @Test
+    void pipeline_stopOnFatal() throws Exception {
+        List<String> log = new java.util.ArrayList<>();
+        MigrationStep s1 = ctx -> { log.add("s1"); return StepResult.fatal("fatal!"); };
+        MigrationStep s2 = ctx -> { log.add("s2"); return StepResult.ok("ok"); };
+
+        new MigrationPipeline(List.of(s1, s2)).run(new StepContext());
+
+        assertEquals(List.of("s1"), log, "s2 must not run after fatal");
+    }
+
+    @Test
+    void pipeline_emptySteps_runsOk() throws Exception {
+        // should not throw
+        assertDoesNotThrow(() ->
+            new MigrationPipeline(java.util.List.of()).run(new StepContext()));
     }
 }
