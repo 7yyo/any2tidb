@@ -25,10 +25,30 @@ public interface DumpExtractor {
                      int chunkSize, RowBatchConsumer consumer) throws Exception;
 
     /**
+     * Variant that controls whether {@code WITH (NOLOCK)} is appended to the query.
+     * Default delegates to {@link #streamTable(Connection, String, String, int, RowBatchConsumer)}
+     * with {@code useNolock = true} for backwards compatibility.
+     */
+    default void streamTable(Connection conn, String schema, String table,
+                             int chunkSize, boolean useNolock,
+                             RowBatchConsumer consumer) throws Exception {
+        streamTable(conn, schema, table, chunkSize, consumer);
+    }
+
+    /**
      * Return the ordered list of column names for {@code schema.table}.
      * Order must match the column order delivered by {@link #streamTable}.
      */
     List<String> getColumnNames(Connection conn, String schema, String table) throws Exception;
+
+    /**
+     * Variant that controls whether {@code WITH (NOLOCK)} is appended to the query.
+     * Default delegates to {@link #getColumnNames(Connection, String, String)}.
+     */
+    default List<String> getColumnNames(Connection conn, String schema, String table,
+                                        boolean useNolock) throws Exception {
+        return getColumnNames(conn, schema, table);
+    }
 
     /**
      * Return a fast, approximate row count for progress reporting.

@@ -22,7 +22,15 @@ public class SqlServerDumpExtractor implements DumpExtractor {
     @Override
     public void streamTable(Connection conn, String schema, String table,
                             int chunkSize, RowBatchConsumer consumer) throws Exception {
-        String sql = "SELECT * FROM [" + schema + "].[" + table + "] WITH (NOLOCK)";
+        streamTable(conn, schema, table, chunkSize, true, consumer);
+    }
+
+    @Override
+    public void streamTable(Connection conn, String schema, String table,
+                            int chunkSize, boolean useNolock,
+                            RowBatchConsumer consumer) throws Exception {
+        String hint = useNolock ? " WITH (NOLOCK)" : "";
+        String sql = "SELECT * FROM [" + schema + "].[" + table + "]" + hint;
 
         try (PreparedStatement ps = conn.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
@@ -59,7 +67,14 @@ public class SqlServerDumpExtractor implements DumpExtractor {
 
     @Override
     public List<String> getColumnNames(Connection conn, String schema, String table) throws Exception {
-        String sql = "SELECT * FROM [" + schema + "].[" + table + "] WITH (NOLOCK) WHERE 1=0";
+        return getColumnNames(conn, schema, table, true);
+    }
+
+    @Override
+    public List<String> getColumnNames(Connection conn, String schema, String table,
+                                       boolean useNolock) throws Exception {
+        String hint = useNolock ? " WITH (NOLOCK)" : "";
+        String sql = "SELECT * FROM [" + schema + "].[" + table + "]" + hint + " WHERE 1=0";
         try (PreparedStatement ps = conn.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              ResultSet rs = ps.executeQuery()) {

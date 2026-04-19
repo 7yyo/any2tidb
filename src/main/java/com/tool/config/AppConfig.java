@@ -82,6 +82,13 @@ public class AppConfig {
         /** Append WITH (NOLOCK) to SELECT — reduces lock contention, allows dirty reads. */
         private boolean nolock = true;
 
+        /**
+         * Enable SNAPSHOT isolation mode: auto-enables library-level snapshot isolation,
+         * sets SNAPSHOT isolation level on each export connection, and records startLsn in
+         * dump-meta.json. When true, {@code nolock} is ignored.
+         */
+        private boolean snapshotIsolation = false;
+
         /** Number of tables exported concurrently. */
         private int concurrency = 4;
 
@@ -95,6 +102,8 @@ public class AppConfig {
         public void setGenerateSchema(boolean v) { this.generateSchema = v; }
         public boolean isNolock()             { return nolock; }
         public void setNolock(boolean v)      { this.nolock = v; }
+        public boolean isSnapshotIsolation()  { return snapshotIsolation; }
+        public void setSnapshotIsolation(boolean v) { this.snapshotIsolation = v; }
         public int getConcurrency()           { return concurrency; }
         public void setConcurrency(int v)     { this.concurrency = v; }
 

@@ -29,12 +29,12 @@ target:
 
 convert:
   # ── 场景 1：全实例迁移（所有用户库、所有 schema、所有表）────────────────────
-  schemas: []
-  tables: []
+  #schemas: []
+  #tables: []
 
   # ── 场景 2：按 schema 过滤（每个库只迁移指定 schema 下的表）─────────────────
-  #schemas:
-  #  - audit
+  schemas:
+    - audit
   #  - dbo
   # tables: []
 
@@ -73,6 +73,11 @@ dump:
 
   # SELECT 时是否加 WITH (NOLOCK)，减少对生产库的锁竞争（允许脏读）
   nolock: true
+
+  # 是否使用快照隔离（SNAPSHOT ISOLATION），需 SA 权限
+  # true = 自动开启库级快照隔离，导出连接使用 SNAPSHOT 隔离级别，记录 startLsn 供增量衔接
+  # false = 使用 nolock 配置（默认）
+  snapshotIsolation: false
 
   # 并发导出的表数量（每张表一个独立线程 + 连接）
   concurrency: 4

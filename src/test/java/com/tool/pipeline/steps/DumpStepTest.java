@@ -11,9 +11,11 @@ import com.tool.schema.extractor.SchemaExtractor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
+import java.sql.*;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -76,7 +78,7 @@ class DumpStepTest {
         when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
         when(schemaExtractor.listTables(any(), any(), any()))
                 .thenReturn(List.<String[]>of(new String[]{"dbo", "orders"}));
-        when(dumpExtractor.getColumnNames(any(), eq("dbo"), eq("orders")))
+        when(dumpExtractor.getColumnNames(any(), eq("dbo"), eq("orders"), anyBoolean()))
                 .thenReturn(List.of("id", "amount"));
         when(dumpExtractor.estimateRowCount(any(), any(), any())).thenReturn(100L);
 
@@ -86,7 +88,7 @@ class DumpStepTest {
 
         assertFalse(r.isFatal());
         verify(dumpExtractor).streamTable(eq(mockConn), eq("dbo"), eq("orders"),
-                anyInt(), any());
+                anyInt(), anyBoolean(), any());
         verify(dumpWriter).close();
     }
 
@@ -107,5 +109,198 @@ class DumpStepTest {
         DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
                 () -> dumpWriter, log);
         assertEquals("Dump", step.name());
+    }
+
+    // ── snapshotIsolation = false (default) ──────────────────────────────────
+
+    @Test
+    void snapshotIsolationFalse_nolockUsed_noAlterDatabase() throws Exception {
+        config.getDump().setSnapshotIsolation(false);
+        config.getDump().setNolock(true);
+
+        Connection mockConn = mock(Connection.class);
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
+        when(schemaExtractor.listTables(any(), any(), any()))
+                .thenReturn(List.<String[]>of(new String[]{"dbo", "orders"}));
+        when(dumpExtractor.getColumnNames(any(), any(), any(), eq(true)))
+                .thenReturn(List.of("id"));
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> mockConn);
+
+        // No Statement executed on master connection for snapshot isolation
+        verify(mockConn, never()).createStatement();
+        // streamTable called with useNolock=true
+        verify(dumpExtractor).streamTable(any(), any(), any(), anyInt(), eq(true), any());
+    }
+
+    // ── snapshotIsolation = true ──────────────────────────────────────────────
+
+    @Test
+    void snapshotIsolationTrue_alterDatabaseCalledIfNotOn() throws Exception {
+        config.getDump().setSnapshotIsolation(true);
+
+        // Master connection mock: returns snapshot state "OFF" → ALTER DATABASE expected
+        Connection masterConn = mock(Connection.class);
+        PreparedStatement checkPs = mock(PreparedStatement.class);
+        ResultSet checkRs = mock(ResultSet.class);
+        when(masterConn.prepareStatement(contains("snapshot_isolation_state_desc")))
+                .thenReturn(checkPs);
+        when(checkPs.executeQuery()).thenReturn(checkRs);
+        when(checkRs.next()).thenReturn(true);
+        when(checkRs.getString(1)).thenReturn("OFF");
+
+        Statement alterSt = mock(Statement.class);
+        when(masterConn.createStatement()).thenReturn(alterSt);
+
+        // For readStartLsn call on master
+        Statement lsnSt = mock(Statement.class);
+        ResultSet lsnRs = mock(ResultSet.class);
+        when(lsnRs.next()).thenReturn(false);
+        when(lsnSt.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(lsnRs);
+
+        // We need masterConn.createStatement() to serve both readStartLsn and ALTER calls
+        // Use a counter approach via consecutive stubbing
+        when(masterConn.createStatement())
+                .thenReturn(lsnSt)   // first call: readStartLsn
+                .thenReturn(alterSt); // second call: ALTER DATABASE
+
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
+        when(dbConn.createStatement()).thenReturn(isoSt);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
+        when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> "master".equals(dbName) ? masterConn : dbConn);
+
+        // ALTER DATABASE must have been called
+        verify(alterSt).execute(contains("ALTER DATABASE"));
+        // SET TRANSACTION ISOLATION LEVEL SNAPSHOT on the db connection
+        verify(isoSt).execute(eq("SET TRANSACTION ISOLATION LEVEL SNAPSHOT"));
+    }
+
+    @Test
+    void snapshotIsolationTrue_noAlterIfAlreadyOn() throws Exception {
+        config.getDump().setSnapshotIsolation(true);
+
+        Connection masterConn = mock(Connection.class);
+        PreparedStatement checkPs = mock(PreparedStatement.class);
+        ResultSet checkRs = mock(ResultSet.class);
+        when(masterConn.prepareStatement(contains("snapshot_isolation_state_desc")))
+                .thenReturn(checkPs);
+        when(checkPs.executeQuery()).thenReturn(checkRs);
+        when(checkRs.next()).thenReturn(true);
+        when(checkRs.getString(1)).thenReturn("ON");
+
+        Statement lsnSt = mock(Statement.class);
+        ResultSet lsnRs = mock(ResultSet.class);
+        when(lsnRs.next()).thenReturn(false);
+        when(lsnSt.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(lsnRs);
+        when(masterConn.createStatement()).thenReturn(lsnSt);
+
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
+        when(dbConn.createStatement()).thenReturn(isoSt);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
+        when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> "master".equals(dbName) ? masterConn : dbConn);
+
+        // ALTER DATABASE must NOT have been called (already ON)
+        verify(lsnSt, never()).execute(contains("ALTER DATABASE"));
+    }
+
+    @Test
+    void snapshotIsolationTrue_streamTableCalledWithNolockFalse() throws Exception {
+        config.getDump().setSnapshotIsolation(true);
+
+        Connection masterConn = mock(Connection.class);
+        PreparedStatement checkPs = mock(PreparedStatement.class);
+        ResultSet checkRs = mock(ResultSet.class);
+        when(masterConn.prepareStatement(any())).thenReturn(checkPs);
+        when(checkPs.executeQuery()).thenReturn(checkRs);
+        when(checkRs.next()).thenReturn(true).thenReturn(false);
+        when(checkRs.getString(1)).thenReturn("ON");
+
+        Statement lsnSt = mock(Statement.class);
+        ResultSet lsnRs = mock(ResultSet.class);
+        when(lsnRs.next()).thenReturn(false);
+        when(lsnSt.executeQuery(any())).thenReturn(lsnRs);
+        when(masterConn.createStatement()).thenReturn(lsnSt);
+
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
+        when(dbConn.createStatement()).thenReturn(isoSt);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
+        when(schemaExtractor.listTables(any(), any(), any()))
+                .thenReturn(List.<String[]>of(new String[]{"dbo", "orders"}));
+        when(dumpExtractor.getColumnNames(any(), any(), any(), eq(false)))
+                .thenReturn(List.of("id"));
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> "master".equals(dbName) ? masterConn : dbConn);
+
+        // useNolock=false when snapshotIsolation=true
+        verify(dumpExtractor).streamTable(any(), any(), any(), anyInt(), eq(false), any());
+    }
+
+    // ── writeDumpMeta ─────────────────────────────────────────────────────────
+
+    @Test
+    void writeDumpMeta_createsJsonFile() throws Exception {
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+
+        Path outDir = tmp.resolve("meta-test");
+        step.writeDumpMeta(outDir, "0xABCD", "2026-04-19T00:00:00Z",
+                List.of("db1", "db2"), true);
+
+        Path metaFile = outDir.resolve("dump-meta.json");
+        assertTrue(Files.exists(metaFile), "dump-meta.json should be created");
+        String content = Files.readString(metaFile);
+        assertTrue(content.contains("\"startLsn\": \"0xABCD\""));
+        assertTrue(content.contains("\"startTime\": \"2026-04-19T00:00:00Z\""));
+        assertTrue(content.contains("\"db1\""));
+        assertTrue(content.contains("\"db2\""));
+        assertTrue(content.contains("\"snapshotIsolation\": true"));
+    }
+
+    @Test
+    void writeDumpMeta_nullLsn_writesJsonNull() throws Exception {
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+
+        Path outDir = tmp.resolve("meta-null");
+        step.writeDumpMeta(outDir, null, "2026-04-19T00:00:00Z", List.of("db1"), false);
+
+        String content = Files.readString(outDir.resolve("dump-meta.json"));
+        assertTrue(content.contains("\"startLsn\": null"));
+        assertTrue(content.contains("\"snapshotIsolation\": false"));
+    }
+
+    @Test
+    void writeDumpMeta_writtenAfterExecution() throws Exception {
+        config.getDump().setSnapshotIsolation(false);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("mydb"));
+        when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> mock(Connection.class));
+
+        // Find any dump-meta.json under tmp (outputRoot includes timestamp subdir)
+        boolean found = Files.walk(tmp)
+                .anyMatch(p -> p.getFileName().toString().equals("dump-meta.json"));
+        assertTrue(found, "dump-meta.json should be written after execution");
     }
 }

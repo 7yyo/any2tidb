@@ -10,8 +10,7 @@ import com.tool.pipeline.StepResult;
 import com.tool.schema.extractor.SchemaExtractor;
 
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
+import java.sql.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -104,15 +103,37 @@ public class DumpStep implements MigrationStep {
             dbNames = List.of();
         }
 
+        boolean useSnapshot = dc.isSnapshotIsolation();
+        String startTime = java.time.Instant.now().toString();
+        String startLsn = null;
+
+        if (useSnapshot) {
+            try (Connection masterConn2 = connFactory.apply("master")) {
+                startLsn = readStartLsn(masterConn2);
+            }
+        }
+
         List<DumpTableResult> allResults = new ArrayList<>();
         long totalRows = 0L;
         int  concurrency = Math.max(1, dc.getConcurrency());
 
         for (String dbName : dbNames) {
+            if (useSnapshot) {
+                try (Connection masterConn = connFactory.apply("master")) {
+                    ensureSnapshotIsolation(masterConn, dbName);
+                }
+            }
+
             Connection dbConn = connFactory.apply(dbName);
             try {
+                if (useSnapshot) {
+                    setSnapshotIsolationLevel(dbConn);
+                }
+
                 List<String[]> tableList = schemaExtractor.listTables(dbConn, schemas, tables);
                 log.log("INFO", "Dumping database", "db", dbName, "tables", tableList.size());
+
+                boolean useNolock = !useSnapshot && dc.isNolock();
 
                 ExecutorService pool = Executors.newFixedThreadPool(concurrency);
                 List<Future<DumpTableResult>> futures = new ArrayList<>();
@@ -121,7 +142,8 @@ public class DumpStep implements MigrationStep {
                     String schema = entry[0];
                     String table  = entry[1];
                     futures.add(pool.submit(() ->
-                            dumpOneTable(connFactory, dbName, schema, table, dc, outputRoot)));
+                            dumpOneTable(connFactory, dbName, schema, table, dc,
+                                    outputRoot, useSnapshot, useNolock)));
                 }
 
                 pool.shutdown();
@@ -146,6 +168,8 @@ public class DumpStep implements MigrationStep {
             }
         }
 
+        writeDumpMeta(outputRoot, startLsn, startTime, dbNames, useSnapshot);
+
         ctx.put("dumpSummaries", allResults);
         ctx.put("dumpTotalRows", totalRows);
 
@@ -157,7 +181,8 @@ public class DumpStep implements MigrationStep {
 
     private DumpTableResult dumpOneTable(ConnectionFactory connFactory,
                                          String dbName, String schema, String table,
-                                         AppConfig.DumpConfig dc, Path outputRoot) {
+                                         AppConfig.DumpConfig dc, Path outputRoot,
+                                         boolean useSnapshot, boolean useNolock) {
         long start = System.currentTimeMillis();
         DumpWriter writer = writerFactory.get();
         long[] rowCount  = {0L};
@@ -166,13 +191,18 @@ public class DumpStep implements MigrationStep {
         try {
             Connection conn = connFactory.apply(dbName);
             try {
-                List<String> columns = dumpExtractor.getColumnNames(conn, schema, table);
+                if (useSnapshot) {
+                    setSnapshotIsolationLevel(conn);
+                }
 
-                dumpExtractor.streamTable(conn, schema, table, dc.getChunkSize(), batch -> {
-                    writer.writeBatch(outputRoot, dbName, schema, table, columns, batch);
-                    rowCount[0] += batch.rows().size();
-                    fileCount[0] = batch.batchIndex() + 1;
-                });
+                List<String> columns = dumpExtractor.getColumnNames(conn, schema, table, useNolock);
+
+                dumpExtractor.streamTable(conn, schema, table, dc.getChunkSize(), useNolock,
+                        batch -> {
+                            writer.writeBatch(outputRoot, dbName, schema, table, columns, batch);
+                            rowCount[0] += batch.rows().size();
+                            fileCount[0] = batch.batchIndex() + 1;
+                        });
 
                 writer.close();
                 return new DumpTableResult(dbName, schema, table,
@@ -187,6 +217,67 @@ public class DumpStep implements MigrationStep {
         }
     }
 
+    // ── Snapshot isolation helpers ────────────────────────────────────────────
+
+    void ensureSnapshotIsolation(Connection masterConn, String dbName) throws Exception {
+        String checkSql = "SELECT snapshot_isolation_state_desc FROM sys.databases WHERE name = ?";
+        try (PreparedStatement ps = masterConn.prepareStatement(checkSql)) {
+            ps.setString(1, dbName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && "ON".equalsIgnoreCase(rs.getString(1))) {
+                    return; // already enabled
+                }
+            }
+        }
+        try (Statement st = masterConn.createStatement()) {
+            st.execute("ALTER DATABASE [" + dbName + "] SET ALLOW_SNAPSHOT_ISOLATION ON");
+        }
+    }
+
+    void setSnapshotIsolationLevel(Connection conn) throws Exception {
+        try (Statement st = conn.createStatement()) {
+            st.execute("SET TRANSACTION ISOLATION LEVEL SNAPSHOT");
+        }
+    }
+
+    String readStartLsn(Connection masterConn) {
+        try (Statement st = masterConn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT sys.fn_cdc_get_max_lsn()")) {
+            if (rs.next()) {
+                byte[] lsn = rs.getBytes(1);
+                if (lsn == null) return null;
+                StringBuilder sb = new StringBuilder("0x");
+                for (byte b : lsn) sb.append(String.format("%02X", b));
+                return sb.toString();
+            }
+        } catch (Exception e) {
+            // CDC might not be enabled — return null, not fatal
+        }
+        return null;
+    }
+
+    void writeDumpMeta(Path outputRoot, String startLsn, String startTime,
+                       List<String> databases, boolean snapshotIsolation) {
+        try {
+            java.nio.file.Files.createDirectories(outputRoot);
+            Path metaFile = outputRoot.resolve("dump-meta.json");
+            String lsnValue = startLsn != null ? "\"" + startLsn + "\"" : "null";
+            String json = "{\n" +
+                "  \"startTime\": \"" + startTime + "\",\n" +
+                "  \"startLsn\": " + lsnValue + ",\n" +
+                "  \"databases\": [" + databases.stream()
+                    .map(d -> "\"" + d + "\"")
+                    .collect(java.util.stream.Collectors.joining(", ")) + "],\n" +
+                "  \"snapshotIsolation\": " + snapshotIsolation + "\n" +
+                "}\n";
+            java.nio.file.Files.writeString(metaFile, json, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            log.log("WARN", "Failed to write dump-meta.json", "error", e.getMessage());
+        }
+    }
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+
     private static final DateTimeFormatter TS_FMT =
             DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
@@ -197,3 +288,4 @@ public class DumpStep implements MigrationStep {
         return Path.of(base, LocalDateTime.now().format(TS_FMT));
     }
 }
+
