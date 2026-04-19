@@ -1,6 +1,8 @@
 package com.tool;
 
 import com.tool.config.AppConfig;
+import com.tool.dump.extractor.SqlServerDumpExtractor;
+import com.tool.dump.writer.CsvDumpWriter;
 import com.tool.logging.StructuredLogger;
 import com.tool.output.ProgressReporter;
 import com.tool.output.SummaryPrinter;
@@ -8,6 +10,7 @@ import com.tool.pipeline.MigrationPipeline;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
+import com.tool.pipeline.steps.DumpStep;
 import com.tool.pipeline.steps.PreCheckStep;
 import com.tool.pipeline.steps.SchemaMigrateStep;
 import com.tool.pipeline.steps.VerifyStep;
@@ -21,6 +24,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -33,17 +37,20 @@ public class App implements ApplicationRunner {
     private final SchemaConverter converter;
     private final SchemaWriter writer;
     private final SchemaVerifier verifier;
+    private final SqlServerDumpExtractor dumpExtractor;
 
     public App(AppConfig config, SchemaExtractor extractor, SchemaConverter converter,
-               SchemaWriter writer, SchemaVerifier verifier) {
-        this.config    = config;
-        this.extractor = extractor;
-        this.converter = converter;
-        this.writer    = writer;
-        this.verifier  = verifier;
+               SchemaWriter writer, SchemaVerifier verifier,
+               SqlServerDumpExtractor dumpExtractor) {
+        this.config        = config;
+        this.extractor     = extractor;
+        this.converter     = converter;
+        this.writer        = writer;
+        this.verifier      = verifier;
+        this.dumpExtractor = dumpExtractor;
     }
 
-    private void printBanner(boolean dryRun, List<String> tablesOverride) {
+    private void printBanner(boolean dryRun, boolean dumpMode, List<String> tablesOverride) {
         System.out.println("┌─────────────────────────────────────────┐");
         System.out.println("│  any2tidb  Any DB → TiDB Migration      │");
         System.out.println("├──────────┬──────────────────────────────┤");
@@ -53,6 +60,8 @@ public class App implements ApplicationRunner {
                 config.getTarget().getHost() + ":" + config.getTarget().getPort());
         if (dryRun)
             System.out.println("│  mode    │  dry-run                     │");
+        if (dumpMode)
+            System.out.println("│  mode    │  dump (CSV export)           │");
         List<String> cfgSchemas = config.getConvert().getSchemas();
         List<String> cfgTables  = config.getConvert().getTables();
         if (cfgSchemas != null && !cfgSchemas.isEmpty())
@@ -71,7 +80,14 @@ public class App implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
-        boolean dryRun = args.containsOption("dry-run");
+        boolean dryRun     = args.containsOption("dry-run");
+        boolean schemaMode = args.containsOption("schema");
+        boolean dumpMode   = args.containsOption("dump");
+
+        if (!schemaMode && !dumpMode) {
+            System.out.println("Usage: any2tidb --schema | --dump [--dry-run] [--tables=t1,t2]");
+            return;
+        }
 
         List<String> tablesOverride = null;
         if (args.containsOption("tables")) {
@@ -80,9 +96,7 @@ public class App implements ApplicationRunner {
                     .map(String::trim).toList();
         }
 
-        // Banner
-        printBanner(dryRun, tablesOverride);
-
+        printBanner(dryRun, dumpMode, tablesOverride);
         try (StructuredLogger log = StructuredLogger.open("any2tidb.log")) {
             log.log("INFO", "any2tidb started");
 
@@ -93,11 +107,18 @@ public class App implements ApplicationRunner {
             ctx.put("dryRun",         dryRun);
             ctx.put("tablesOverride", tablesOverride);
 
-            List<MigrationStep> steps = List.of(
-                    new PreCheckStep(config),
-                    new SchemaMigrateStep(config, extractor, converter, writer, log, progress),
-                    new VerifyStep(config, verifier, log, printer)
-            );
+            List<MigrationStep> steps = new ArrayList<>();
+            steps.add(new PreCheckStep(config));
+
+            if (dumpMode) {
+                steps.add(new DumpStep(config, extractor, dumpExtractor,
+                        () -> new CsvDumpWriter(config.getDump().fileSizeThresholdBytes()),
+                        log));
+            } else {
+                // schemaMode
+                steps.add(new SchemaMigrateStep(config, extractor, converter, writer, log, progress));
+                steps.add(new VerifyStep(config, verifier, log, printer));
+            }
 
             StepResult result = new MigrationPipeline(steps).run(ctx);
             log.log("INFO", "any2tidb finished", "fatal", result.isFatal());
