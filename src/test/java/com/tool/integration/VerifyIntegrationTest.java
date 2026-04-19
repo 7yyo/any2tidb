@@ -1,13 +1,13 @@
 package com.tool.integration;
 
-import com.tool.converter.SchemaConverter;
-import com.tool.converter.TypeMapper;
-import com.tool.extractor.SqlServerExtractor;
-import com.tool.model.TableSchema;
-import com.tool.verifier.SchemaVerifier;
-import com.tool.verifier.VerifyResult;
-import com.tool.writer.TiDBWriter;
-import com.tool.ConversionResult;
+import com.tool.schema.converter.SchemaConverter;
+import com.tool.schema.converter.TypeMapper;
+import com.tool.schema.extractor.SqlServerExtractor;
+import com.tool.common.model.TableSchema;
+import com.tool.schema.verifier.SchemaVerifier;
+import com.tool.schema.verifier.VerifyResult;
+import com.tool.schema.writer.TiDBWriter;
+import com.tool.common.model.ConversionResult;
 import org.junit.jupiter.api.*;
 
 import java.sql.*;
@@ -97,8 +97,8 @@ class VerifyIntegrationTest {
         assertEquals(3, r.tidbCols());
         assertEquals(List.of("id"), r.msPkCols());
         assertEquals(List.of("id"), r.tidbPkCols());
-        assertEquals(1, r.msIdx());
-        assertEquals(1, r.tidbIdx());
+        assertEquals(1, r.msIdxNames().size());
+        assertEquals(1, r.tidbIdxNames().size());
         assertEquals("id", r.msAiCol());
         assertEquals("id", r.tidbAiCol());
 
@@ -202,7 +202,7 @@ class VerifyIntegrationTest {
 
         VerifyResult r = verifier.verify(ssConn, tidbConn, "dbo", t);
         assertTrue(r.isMismatch(), "Missing index should cause mismatch, diffLines=" + r.diffLines());
-        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("idx mismatch")));
+        assertTrue(r.diffLines().stream().anyMatch(l -> l.contains("idx missing in TiDB")));
 
         dropSSTable(t); dropTiDBTable(t);
     }

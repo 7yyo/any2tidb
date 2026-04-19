@@ -8,21 +8,20 @@ import java.util.List;
 @ConfigurationProperties(prefix = "")
 public class AppConfig {
 
-    private DbConfig sqlserver = new DbConfig();
-    private DbConfig tidb = new DbConfig();
+    private DbConfig source = new DbConfig();
+    private DbConfig target = new DbConfig();
     private ConvertConfig convert = new ConvertConfig();
 
-    public DbConfig getSqlserver() { return sqlserver; }
-    public void setSqlserver(DbConfig sqlserver) { this.sqlserver = sqlserver; }
-    public DbConfig getTidb() { return tidb; }
-    public void setTidb(DbConfig tidb) { this.tidb = tidb; }
+    public DbConfig getSource() { return source; }
+    public void setSource(DbConfig source) { this.source = source; }
+    public DbConfig getTarget() { return target; }
+    public void setTarget(DbConfig target) { this.target = target; }
     public ConvertConfig getConvert() { return convert; }
     public void setConvert(ConvertConfig convert) { this.convert = convert; }
 
     public static class DbConfig {
         private String host;
         private int port;
-        private String database;
         private String username;
         private String password;
 
@@ -30,19 +29,21 @@ public class AppConfig {
         public void setHost(String host) { this.host = host; }
         public int getPort() { return port; }
         public void setPort(int port) { this.port = port; }
-        public String getDatabase() { return database; }
-        public void setDatabase(String database) { this.database = database; }
         public String getUsername() { return username; }
         public void setUsername(String username) { this.username = username; }
         public String getPassword() { return password; }
         public void setPassword(String password) { this.password = password; }
 
-        public String sqlServerJdbcUrl() {
-            return String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true", host, port, database);
+        public String sqlServerJdbcUrlNoDB() {
+            return String.format("jdbc:sqlserver://%s:%d;encrypt=true;trustServerCertificate=true;loginTimeout=30;socketTimeout=300", host, port);
         }
 
-        public String tidbJdbcUrl() {
-            return String.format("jdbc:mysql://%s:%d/%s?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8", host, port, database);
+        public String sqlServerJdbcUrlForDB(String dbName) {
+            return String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=30;socketTimeout=300", host, port, dbName);
+        }
+
+        public String tidbJdbcUrlNoDB() {
+            return String.format("jdbc:mysql://%s:%d?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8&connectTimeout=30000&socketTimeout=300000", host, port);
         }
     }
 

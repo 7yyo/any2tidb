@@ -1,12 +1,12 @@
 package com.tool.integration;
 
-import com.tool.ConversionResult;
-import com.tool.converter.SchemaConverter;
-import com.tool.converter.TypeMapper;
-import com.tool.model.ColumnSchema;
-import com.tool.model.IndexSchema;
-import com.tool.model.TableSchema;
-import com.tool.writer.TiDBWriter;
+import com.tool.common.model.ConversionResult;
+import com.tool.schema.converter.SchemaConverter;
+import com.tool.schema.converter.TypeMapper;
+import com.tool.common.model.ColumnSchema;
+import com.tool.common.model.IndexSchema;
+import com.tool.common.model.TableSchema;
+import com.tool.schema.writer.TiDBWriter;
 import org.junit.jupiter.api.*;
 
 import java.sql.*;
@@ -102,7 +102,7 @@ class DdlExecutionTest {
     }
 
     /** Generate DDL, execute on TiDB, return ConversionResult. */
-    private ConversionResult exec(TableSchema t, boolean drop) throws SQLException {
+    private ConversionResult exec(TableSchema t, boolean drop) throws Exception {
         ConversionResult result = new ConversionResult("dbo." + t.getTableName());
         String ddl = converter.toCreateTableDDL(t, result, drop);
         writer.executeDDL(tidbConn, ddl, result);

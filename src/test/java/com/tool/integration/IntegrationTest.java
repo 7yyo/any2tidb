@@ -1,11 +1,11 @@
 package com.tool.integration;
 
-import com.tool.ConversionResult;
-import com.tool.converter.SchemaConverter;
-import com.tool.converter.TypeMapper;
-import com.tool.extractor.SqlServerExtractor;
-import com.tool.model.TableSchema;
-import com.tool.writer.TiDBWriter;
+import com.tool.common.model.ConversionResult;
+import com.tool.schema.converter.SchemaConverter;
+import com.tool.schema.converter.TypeMapper;
+import com.tool.schema.extractor.SqlServerExtractor;
+import com.tool.common.model.TableSchema;
+import com.tool.schema.writer.TiDBWriter;
 import org.junit.jupiter.api.*;
 
 import java.sql.*;

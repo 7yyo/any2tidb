@@ -1,0 +1,509 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>App.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">sqlserver-to-tidb</a> &gt; <a href="index.source.html" class="el_package">com.tool</a> &gt; <span class="el_source">App.java</span></div><h1>App.java</h1><pre class="source lang-java linenums">package com.tool;
+
+import com.tool.common.model.ConversionResult;
+import com.tool.config.AppConfig;
+import com.tool.schema.converter.SchemaConverter;
+import com.tool.schema.extractor.SqlServerExtractor;
+import com.tool.common.model.TableSchema;
+import com.tool.schema.verifier.SchemaVerifier;
+import com.tool.schema.verifier.VerifyResult;
+import com.tool.schema.writer.TiDBWriter;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@SpringBootApplication
+@EnableConfigurationProperties
+public class App implements ApplicationRunner {
+
+    private final AppConfig config;
+    private final SqlServerExtractor extractor;
+    private final SchemaConverter converter;
+    private final TiDBWriter writer;
+    private final SchemaVerifier verifier;
+
+    /** File logger — all verbose progress output goes here, not to stdout. */
+    private PrintWriter fileLog;
+<span class="nc" id="L38">    private static final DateTimeFormatter TS =</span>
+<span class="nc" id="L39">            DateTimeFormatter.ofPattern(&quot;yyyy/MM/dd HH:mm:ss.SSS Z&quot;);</span>
+
+    public App(AppConfig config, SqlServerExtractor extractor, SchemaConverter converter,
+<span class="nc" id="L42">               TiDBWriter writer, SchemaVerifier verifier) {</span>
+<span class="nc" id="L43">        this.config = config;</span>
+<span class="nc" id="L44">        this.extractor = extractor;</span>
+<span class="nc" id="L45">        this.converter = converter;</span>
+<span class="nc" id="L46">        this.writer = writer;</span>
+<span class="nc" id="L47">        this.verifier = verifier;</span>
+<span class="nc" id="L48">    }</span>
+
+    public static void main(String[] args) {
+<span class="nc" id="L51">        SpringApplication.run(App.class, args);</span>
+<span class="nc" id="L52">    }</span>
+
+    @Override
+    public void run(ApplicationArguments args) throws Exception {
+        // Open file logger (append mode so repeated runs accumulate)
+        try {
+<span class="nc" id="L58">            fileLog = new PrintWriter(new FileWriter(&quot;ms2tidb.log&quot;, true), true);</span>
+<span class="nc" id="L59">        } catch (Exception e) {</span>
+            // Fall back to /dev/null — file logging is best-effort
+<span class="nc" id="L61">            fileLog = new PrintWriter(new java.io.OutputStream() { public void write(int b) {} });</span>
+<span class="nc" id="L62">        }</span>
+<span class="nc" id="L63">        flog(&quot;INFO&quot;, &quot;ms2tidb started&quot;);</span>
+
+<span class="nc" id="L65">        boolean dryRun = args.containsOption(&quot;dry-run&quot;);</span>
+
+<span class="nc" id="L67">        List&lt;String&gt; tablesOverride = null;</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">        if (args.containsOption(&quot;tables&quot;)) {</span>
+<span class="nc" id="L69">            String val = args.getOptionValues(&quot;tables&quot;).get(0);</span>
+<span class="nc" id="L70">            tablesOverride = Arrays.stream(val.split(&quot;,&quot;)).map(String::trim).collect(Collectors.toList());</span>
+        }
+
+<span class="nc" id="L73">        List&lt;String&gt; schemas = config.getConvert().getSchemas();</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">        List&lt;String&gt; tables = tablesOverride != null ? tablesOverride : config.getConvert().getTables();</span>
+<span class="nc" id="L75">        boolean dropIfExists = config.getConvert().isDropIfExists();</span>
+<span class="nc" id="L76">        boolean continueOnError = config.getConvert().isContinueOnError();</span>
+
+        // ── Startup banner ────────────────────────────────────────────────────
+<span class="nc" id="L79">        System.out.println(&quot;┌─────────────────────────────────────────┐&quot;);</span>
+<span class="nc" id="L80">        System.out.println(&quot;│  ms2tidb  SQL Server → TiDB Migration   │&quot;);</span>
+<span class="nc" id="L81">        System.out.println(&quot;├──────────┬──────────────────────────────┤&quot;);</span>
+<span class="nc" id="L82">        System.out.printf( &quot;│  source  │  %-28s│%n&quot;,</span>
+<span class="nc" id="L83">                config.getSource().getHost() + &quot;:&quot; + config.getSource().getPort());</span>
+<span class="nc" id="L84">        System.out.printf( &quot;│  target  │  %-28s│%n&quot;,</span>
+<span class="nc" id="L85">                config.getTarget().getHost() + &quot;:&quot; + config.getTarget().getPort());</span>
+<span class="nc bnc" id="L86" title="All 2 branches missed.">        if (!schemas.isEmpty())</span>
+<span class="nc" id="L87">            System.out.printf(&quot;│  schemas │  %-28s│%n&quot;, schemas.toString());</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        if (!tables.isEmpty())</span>
+<span class="nc" id="L89">            System.out.printf(&quot;│  tables  │  %-28s│%n&quot;, tables.toString());</span>
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (dryRun)</span>
+<span class="nc" id="L91">            System.out.println(&quot;│  mode    │  dry-run                     │&quot;);</span>
+<span class="nc" id="L92">        System.out.println(&quot;└──────────┴──────────────────────────────┘&quot;);</span>
+<span class="nc" id="L93">        System.out.println();</span>
+
+<span class="nc" id="L95">        int totalFailed = 0;</span>
+<span class="nc" id="L96">        List&lt;DbVerifyPending&gt; verifyPending = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L98">        flog(&quot;INFO&quot;, &quot;Connecting to SQL Server...&quot;);</span>
+        List&lt;String&gt; dbNames;
+<span class="nc" id="L100">        try (Connection masterConn = DriverManager.getConnection(</span>
+<span class="nc" id="L101">                config.getSource().sqlServerJdbcUrlNoDB(),</span>
+<span class="nc" id="L102">                config.getSource().getUsername(),</span>
+<span class="nc" id="L103">                config.getSource().getPassword())) {</span>
+<span class="nc" id="L104">            dbNames = extractor.listDatabases(masterConn);</span>
+        }
+<span class="nc" id="L106">        flog(&quot;INFO&quot;, &quot;Found databases&quot;, &quot;count&quot;, dbNames.size(), &quot;databases&quot;, dbNames.toString());</span>
+<span class="nc" id="L107">        dbNameWidth = dbNames.stream().mapToInt(String::length).max().orElse(8);</span>
+
+<span class="nc bnc" id="L109" title="All 2 branches missed.">        for (String dbName : dbNames) {</span>
+<span class="nc" id="L110">            flog(&quot;INFO&quot;, &quot;Processing database&quot;, &quot;db&quot;, dbName);</span>
+<span class="nc" id="L111">            try (Connection ssConn = DriverManager.getConnection(</span>
+<span class="nc" id="L112">                    config.getSource().sqlServerJdbcUrlForDB(dbName),</span>
+<span class="nc" id="L113">                    config.getSource().getUsername(),</span>
+<span class="nc" id="L114">                    config.getSource().getPassword());</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                 Connection tidbConn = dryRun ? null : openTiDB(dbName)) {</span>
+<span class="nc" id="L116">                MigrateResult mr = migrateOneDatabase(ssConn, tidbConn, dbName,</span>
+                        schemas, tables, dropIfExists, continueOnError, dryRun);
+<span class="nc" id="L118">                totalFailed += mr.failed;</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">                if (!dryRun) {</span>
+<span class="nc" id="L120">                    verifyPending.add(new DbVerifyPending(dbName, mr.allTables.size(),</span>
+                            mr.warned, mr.skipped, mr.allTables, mr.succeededTables, mr.convResults));
+                }
+<span class="nc bnc" id="L123" title="All 2 branches missed.">                if (mr.stoppedEarly) {</span>
+<span class="nc" id="L124">                    flog(&quot;WARN&quot;, &quot;Stopped early&quot;, &quot;reason&quot;, &quot;continueOnError=false&quot;);</span>
+<span class="nc" id="L125">                    clearProgress();</span>
+<span class="nc" id="L126">                    System.out.println(&quot;[WARN ] Stopped early (continueOnError=false) — see ms2tidb.log&quot;);</span>
+                    break;
+                }
+<span class="nc bnc" id="L129" title="All 4 branches missed.">            }</span>
+<span class="nc" id="L130">        }</span>
+
+        // Clear the progress line before printing verify results
+<span class="nc" id="L133">        clearProgress();</span>
+
+        // ── Collect + print all VERIFY results in one unified table ──────────
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (!verifyPending.isEmpty()) {</span>
+<span class="nc" id="L137">            List&lt;IssueRow&gt; issues = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">            for (DbVerifyPending vp : verifyPending) {</span>
+<span class="nc" id="L139">                try (Connection ssConn = DriverManager.getConnection(</span>
+<span class="nc" id="L140">                        config.getSource().sqlServerJdbcUrlForDB(vp.dbName),</span>
+<span class="nc" id="L141">                        config.getSource().getUsername(),</span>
+<span class="nc" id="L142">                        config.getSource().getPassword());</span>
+<span class="nc" id="L143">                     Connection tidbConn = openTiDB(vp.dbName)) {</span>
+<span class="nc" id="L144">                    collectVerifyRows(tidbConn, ssConn, vp, issues);</span>
+<span class="nc" id="L145">                } catch (Exception e) {</span>
+<span class="nc" id="L146">                    System.out.println(&quot;[ERROR] VERIFY failed for &quot; + vp.dbName + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L147">                    flog(&quot;ERROR&quot;, &quot;VERIFY failed&quot;, &quot;db&quot;, vp.dbName, &quot;error&quot;, e.getMessage());</span>
+<span class="nc" id="L148">                }</span>
+<span class="nc" id="L149">            }</span>
+<span class="nc" id="L150">            printSummary(verifyPending, issues);</span>
+        }
+
+<span class="nc" id="L153">        flog(&quot;INFO&quot;, &quot;ms2tidb finished&quot;);</span>
+<span class="nc" id="L154">        fileLog.close();</span>
+
+<span class="nc bnc" id="L156" title="All 2 branches missed.">        if (totalFailed &gt; 0) System.exit(1);</span>
+<span class="nc" id="L157">    }</span>
+
+    // ── Lightweight result carriers ───────────────────────────────────────────
+
+    private static class MigrateResult {
+        final int failed;
+        final int warned;
+        final int skipped;
+        final boolean stoppedEarly;
+        final List&lt;String[]&gt; allTables;
+        final List&lt;String[]&gt; succeededTables;
+        final Map&lt;String, ConversionResult&gt; convResults;
+        MigrateResult(int failed, int warned, int skipped, boolean stoppedEarly,
+                       List&lt;String[]&gt; allTables, List&lt;String[]&gt; succeededTables,
+<span class="nc" id="L171">                       Map&lt;String, ConversionResult&gt; convResults) {</span>
+<span class="nc" id="L172">            this.failed = failed;</span>
+<span class="nc" id="L173">            this.warned = warned;</span>
+<span class="nc" id="L174">            this.skipped = skipped;</span>
+<span class="nc" id="L175">            this.stoppedEarly = stoppedEarly;</span>
+<span class="nc" id="L176">            this.allTables = allTables;</span>
+<span class="nc" id="L177">            this.succeededTables = succeededTables;</span>
+<span class="nc" id="L178">            this.convResults = convResults;</span>
+<span class="nc" id="L179">        }</span>
+    }
+
+    private static class DbVerifyPending {
+        final String dbName;
+        final int total;
+        final int warned;
+        final int skipped;
+        final List&lt;String[]&gt; allTables;
+        final List&lt;String[]&gt; succeededTables;
+        final Map&lt;String, ConversionResult&gt; convResults;
+        DbVerifyPending(String dbName, int total, int warned, int skipped,
+                         List&lt;String[]&gt; allTables, List&lt;String[]&gt; succeededTables,
+<span class="nc" id="L192">                         Map&lt;String, ConversionResult&gt; convResults) {</span>
+<span class="nc" id="L193">            this.dbName = dbName;</span>
+<span class="nc" id="L194">            this.total = total;</span>
+<span class="nc" id="L195">            this.warned = warned;</span>
+<span class="nc" id="L196">            this.skipped = skipped;</span>
+<span class="nc" id="L197">            this.allTables = allTables;</span>
+<span class="nc" id="L198">            this.succeededTables = succeededTables;</span>
+<span class="nc" id="L199">            this.convResults = convResults;</span>
+<span class="nc" id="L200">        }</span>
+    }
+
+    private MigrateResult migrateOneDatabase(Connection ssConn, Connection tidbConn,
+                                             String dbName,
+                                             List&lt;String&gt; schemas, List&lt;String&gt; tables,
+                                             boolean dropIfExists, boolean continueOnError,
+                                             boolean dryRun) throws Exception {
+<span class="nc" id="L208">        List&lt;String[]&gt; tableList = extractor.listTables(ssConn, schemas, tables);</span>
+<span class="nc" id="L209">        flog(&quot;INFO&quot;, &quot;Starting conversion&quot;, &quot;db&quot;, dbName, &quot;tables&quot;, tableList.size());</span>
+
+        // Pre-check: detect table name conflicts across schemas
+<span class="nc" id="L212">        Map&lt;String, List&lt;String&gt;&gt; nameToSchemas = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">        for (String[] entry : tableList) {</span>
+<span class="nc" id="L214">            nameToSchemas.computeIfAbsent(entry[1], k -&gt; new ArrayList&lt;&gt;()).add(entry[0]);</span>
+<span class="nc" id="L215">        }</span>
+<span class="nc" id="L216">        List&lt;String&gt; conflicts = nameToSchemas.entrySet().stream()</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                .filter(e -&gt; e.getValue().size() &gt; 1)</span>
+<span class="nc" id="L218">                .map(e -&gt; &quot;  \&quot;&quot; + e.getKey() + &quot;\&quot;  →  &quot; + String.join(&quot;, &quot;,</span>
+<span class="nc" id="L219">                        e.getValue().stream().map(s -&gt; s + &quot;.&quot; + e.getKey()).toList()))</span>
+<span class="nc" id="L220">                .toList();</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">        if (!conflicts.isEmpty()) {</span>
+<span class="nc" id="L222">            clearProgress();</span>
+<span class="nc" id="L223">            System.out.println(&quot;[ERROR] Table name conflict in [&quot; + dbName + &quot;] — see ms2tidb.log&quot;);</span>
+<span class="nc" id="L224">            flog(&quot;ERROR&quot;, &quot;Table name conflict&quot;, &quot;db&quot;, dbName);</span>
+<span class="nc" id="L225">            conflicts.forEach(line -&gt; flog(&quot;ERROR&quot;, &quot;conflict&quot;, &quot;tables&quot;, line));</span>
+<span class="nc" id="L226">            flog(&quot;ERROR&quot;, &quot;Hint: set convert.schemas=&lt;schema&gt; in application.yml to migrate one schema at a time&quot;);</span>
+<span class="nc" id="L227">            return new MigrateResult(1, 0, 0, true, tableList, List.of(), Map.of());</span>
+        }
+
+<span class="nc" id="L230">        int total = tableList.size();</span>
+<span class="nc" id="L231">        int succeeded = 0, warned = 0, failed = 0, skipped = 0;</span>
+<span class="nc" id="L232">        List&lt;String[]&gt; succeededTables = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L233">        Map&lt;String, ConversionResult&gt; convResults = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L234">        boolean stopEarly = false;</span>
+
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        for (int i = 0; i &lt; total; i++) {</span>
+<span class="nc" id="L237">            String[] entry = tableList.get(i);</span>
+<span class="nc" id="L238">            String schemaName = entry[0], tableName = entry[1];</span>
+<span class="nc" id="L239">            String fullName = schemaName + &quot;.&quot; + tableName;</span>
+
+            // Render progress bar on a single overwritten line
+<span class="nc" id="L242">            printProgress(dbName, i, total, skipped, fullName);</span>
+
+<span class="nc" id="L244">            ConversionResult result = new ConversionResult(fullName);</span>
+            try {
+<span class="nc" id="L246">                TableSchema tableSchema = extractor.extractTable(ssConn, schemaName, tableName);</span>
+<span class="nc" id="L247">                String ddl = converter.toCreateTableDDL(tableSchema, result, dropIfExists);</span>
+
+<span class="nc bnc" id="L249" title="All 2 branches missed.">                if (ddl == null) {</span>
+                    // result already has ERROR set by converter (unskippable columns)
+<span class="nc bnc" id="L251" title="All 2 branches missed.">                } else if (dryRun) {</span>
+<span class="nc" id="L252">                    writer.printDDL(fullName, ddl);</span>
+                } else {
+<span class="nc" id="L254">                    writer.executeDDL(tidbConn, ddl, result);</span>
+                }
+<span class="nc" id="L256">            } catch (Exception e) {</span>
+<span class="nc" id="L257">                result.setError(e.getMessage());</span>
+<span class="nc" id="L258">            }</span>
+
+<span class="nc bnc" id="L260" title="All 5 branches missed.">            switch (result.getStatus()) {</span>
+                case OK -&gt; {
+<span class="nc" id="L262">                    flog(&quot;INFO&quot;, &quot;table converted&quot;, &quot;db&quot;, dbName, &quot;table&quot;, fullName, &quot;status&quot;, &quot;OK&quot;,</span>
+                            &quot;progress&quot;, (i+1) + &quot;/&quot; + total);
+<span class="nc" id="L264">                    succeeded++;</span>
+<span class="nc" id="L265">                    succeededTables.add(entry);</span>
+<span class="nc" id="L266">                    convResults.put(fullName, result);</span>
+<span class="nc" id="L267">                }</span>
+                case WARN -&gt; {
+<span class="nc" id="L269">                    flog(&quot;INFO&quot;, &quot;table converted&quot;, &quot;db&quot;, dbName, &quot;table&quot;, fullName, &quot;status&quot;, &quot;WARN&quot;,</span>
+<span class="nc" id="L270">                            &quot;progress&quot;, (i+1) + &quot;/&quot; + total, &quot;warnings&quot;, result.getWarnings().size());</span>
+<span class="nc bnc" id="L271" title="All 2 branches missed.">                    for (String w : result.getWarnings()) flog(&quot;WARN&quot;, &quot;warning&quot;, &quot;table&quot;, fullName, &quot;detail&quot;, w);</span>
+<span class="nc" id="L272">                    succeeded++;</span>
+<span class="nc" id="L273">                    warned++;</span>
+<span class="nc" id="L274">                    succeededTables.add(entry);</span>
+<span class="nc" id="L275">                    convResults.put(fullName, result);</span>
+<span class="nc" id="L276">                }</span>
+                case ERROR -&gt; {
+<span class="nc" id="L278">                    flog(&quot;ERROR&quot;, &quot;table failed&quot;, &quot;db&quot;, dbName, &quot;table&quot;, fullName,</span>
+<span class="nc" id="L279">                            &quot;progress&quot;, (i+1) + &quot;/&quot; + total, &quot;error&quot;, result.getErrorMessage());</span>
+<span class="nc" id="L280">                    failed++;</span>
+<span class="nc" id="L281">                    convResults.put(fullName, result);</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">                    if (!continueOnError) { stopEarly = true; }</span>
+                }
+                case SKIP -&gt; {
+<span class="nc" id="L285">                    flog(&quot;WARN&quot;, &quot;table skipped&quot;, &quot;db&quot;, dbName, &quot;table&quot;, fullName,</span>
+<span class="nc" id="L286">                            &quot;progress&quot;, (i+1) + &quot;/&quot; + total, &quot;reason&quot;, result.getErrorMessage());</span>
+<span class="nc" id="L287">                    skipped++;</span>
+<span class="nc" id="L288">                    convResults.put(fullName, result);</span>
+                }
+            }
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            if (stopEarly) break;</span>
+        }
+
+        // Final progress line — show completion
+<span class="nc" id="L295">        printProgress(dbName, total, total, skipped, &quot;&quot;);</span>
+<span class="nc" id="L296">        System.out.println(); // newline after progress bar</span>
+<span class="nc" id="L297">        flog(&quot;INFO&quot;, &quot;Conversion completed&quot;, &quot;db&quot;, dbName, &quot;succeeded&quot;, succeeded, &quot;warned&quot;, warned, &quot;failed&quot;, failed, &quot;skipped&quot;, skipped);</span>
+
+<span class="nc" id="L299">        return new MigrateResult(failed, warned, skipped, stopEarly, tableList, succeededTables, convResults);</span>
+    }
+
+    private Connection openTiDB(String dbName) throws Exception {
+<span class="nc" id="L303">        flog(&quot;INFO&quot;, &quot;Connecting to TiDB&quot;, &quot;db&quot;, dbName);</span>
+<span class="nc" id="L304">        Connection conn = DriverManager.getConnection(</span>
+<span class="nc" id="L305">                config.getTarget().tidbJdbcUrlNoDB(),</span>
+<span class="nc" id="L306">                config.getTarget().getUsername(),</span>
+<span class="nc" id="L307">                config.getTarget().getPassword());</span>
+<span class="nc" id="L308">        try (java.sql.Statement st = conn.createStatement()) {</span>
+<span class="nc" id="L309">            st.execute(&quot;CREATE DATABASE IF NOT EXISTS `&quot; + dbName + &quot;`&quot;);</span>
+<span class="nc" id="L310">            st.execute(&quot;USE `&quot; + dbName + &quot;`&quot;);</span>
+        }
+<span class="nc" id="L312">        conn.setCatalog(dbName);</span>
+<span class="nc" id="L313">        return conn;</span>
+    }
+
+    // -------------------------------------------------------------------------
+    // VERIFY output
+    // -------------------------------------------------------------------------
+
+    // ── Issue row (ERROR / SKIP / MISMATCH only) ───────────────────────────────
+
+    private static class IssueRow {
+        final String dbName;
+        final String tableName;
+        final String kind;        // &quot;ERROR&quot;, &quot;SKIP&quot;, &quot;NOTE&quot;, &quot;MISMATCH&quot;
+        final String detail;      // single-line summary or first diff line
+        final List&lt;String&gt; extra; // additional diff lines
+
+<span class="nc" id="L329">        IssueRow(String dbName, String tableName, String kind, String detail, List&lt;String&gt; extra) {</span>
+<span class="nc" id="L330">            this.dbName = dbName; this.tableName = tableName; this.kind = kind;</span>
+<span class="nc bnc" id="L331" title="All 2 branches missed.">            this.detail = detail; this.extra = extra != null ? extra : List.of();</span>
+<span class="nc" id="L332">        }</span>
+    }
+
+    // ── Collect verify rows for one database ──────────────────────────────────
+
+    private void collectVerifyRows(Connection tidbConn, Connection msConn,
+                                   DbVerifyPending vp, List&lt;IssueRow&gt; out) {
+        List&lt;VerifyResult&gt; results;
+        try {
+<span class="nc" id="L341">            results = verifier.verifyAll(msConn, tidbConn, vp.succeededTables);</span>
+<span class="nc" id="L342">        } catch (Exception e) {</span>
+<span class="nc" id="L343">            flog(&quot;ERROR&quot;, &quot;VERIFY failed&quot;, &quot;db&quot;, vp.dbName, &quot;error&quot;, e.getMessage());</span>
+<span class="nc" id="L344">            System.out.println(&quot;[ERROR] VERIFY failed for &quot; + vp.dbName + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L345">            return;</span>
+<span class="nc" id="L346">        }</span>
+
+<span class="nc bnc" id="L348" title="All 2 branches missed.">        for (VerifyResult r : results) {</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">            if (r.isMismatch()) {</span>
+<span class="nc" id="L350">                List&lt;String&gt; diff = r.diffLines();</span>
+                // If there's also known loss, append loss lines after the mismatch lines
+<span class="nc" id="L352">                List&lt;String&gt; allLines = new java.util.ArrayList&lt;&gt;(diff);</span>
+<span class="nc bnc" id="L353" title="All 2 branches missed.">                if (r.hasKnownLoss()) allLines.addAll(r.knownLossLines());</span>
+<span class="nc bnc" id="L354" title="All 2 branches missed.">                String first = allLines.isEmpty() ? &quot;schema mismatch&quot; : allLines.get(0);</span>
+<span class="nc bnc" id="L355" title="All 2 branches missed.">                List&lt;String&gt; rest = allLines.size() &gt; 1 ? allLines.subList(1, allLines.size()) : List.of();</span>
+<span class="nc" id="L356">                out.add(new IssueRow(vp.dbName, r.fullTableName(), &quot;MISMATCH&quot;, first, rest));</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">            } else if (r.hasKnownLoss()) {</span>
+<span class="nc" id="L358">                List&lt;String&gt; lossLines = r.knownLossLines();</span>
+<span class="nc" id="L359">                String first = lossLines.get(0);</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">                List&lt;String&gt; rest = lossLines.size() &gt; 1 ? lossLines.subList(1, lossLines.size()) : List.of();</span>
+<span class="nc" id="L361">                out.add(new IssueRow(vp.dbName, r.fullTableName(), &quot;NOTE&quot;, first, rest));</span>
+            }
+<span class="nc" id="L363">        }</span>
+<span class="nc" id="L364">    }</span>
+
+    // ── Print final summary ────────────────────────────────────────────────────
+
+    private void printSummary(List&lt;DbVerifyPending&gt; pending, List&lt;IssueRow&gt; issues) {
+        // ── Collect ERROR and SKIP issues ─────────────────────────────────────
+<span class="nc" id="L370">        List&lt;IssueRow&gt; allIssues = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L371" title="All 2 branches missed.">        for (DbVerifyPending vp : pending) {</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">            for (Map.Entry&lt;String, ConversionResult&gt; e : vp.convResults.entrySet()) {</span>
+<span class="nc" id="L373">                ConversionResult cr = e.getValue();</span>
+<span class="nc bnc" id="L374" title="All 2 branches missed.">                if (cr.getStatus() == ConversionResult.Status.ERROR) {</span>
+<span class="nc" id="L375">                    allIssues.add(new IssueRow(vp.dbName, e.getKey(), &quot;ERROR&quot;,</span>
+<span class="nc" id="L376">                            cr.getErrorMessage(), List.of()));</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                } else if (cr.getStatus() == ConversionResult.Status.SKIP) {</span>
+<span class="nc" id="L378">                    allIssues.add(new IssueRow(vp.dbName, e.getKey(), &quot;SKIP&quot;,</span>
+<span class="nc" id="L379">                            cr.getErrorMessage(), List.of()));</span>
+                }
+<span class="nc" id="L381">            }</span>
+<span class="nc" id="L382">        }</span>
+<span class="nc" id="L383">        allIssues.addAll(issues); // NOTE and MISMATCH rows</span>
+
+        // ── Global totals ──────────────────────────────────────────────────────
+<span class="nc" id="L386">        int totalTables  = pending.stream().mapToInt(vp -&gt; vp.total).sum();</span>
+<span class="nc" id="L387">        int totalOk      = pending.stream().mapToInt(vp -&gt; vp.succeededTables.size()).sum();</span>
+<span class="nc" id="L388">        int totalErr     = (int) allIssues.stream().filter(i -&gt; &quot;ERROR&quot;.equals(i.kind)).count();</span>
+<span class="nc" id="L389">        int totalSkip    = (int) allIssues.stream().filter(i -&gt; &quot;SKIP&quot;.equals(i.kind)).count();</span>
+<span class="nc" id="L390">        int totalMismatch= (int) allIssues.stream().filter(i -&gt; &quot;MISMATCH&quot;.equals(i.kind)).count();</span>
+<span class="nc" id="L391">        int totalNote    = (int) allIssues.stream().filter(i -&gt; &quot;NOTE&quot;.equals(i.kind)).count();</span>
+
+        // ── Column widths for issue table ──────────────────────────────────────
+<span class="nc" id="L394">        int kindW  = 5; // &quot;ERROR&quot;</span>
+<span class="nc" id="L395">        int dbW    = Math.max(2, allIssues.stream().mapToInt(i -&gt; i.dbName.length()).max().orElse(2));</span>
+<span class="nc" id="L396">        int tableW = Math.max(5, allIssues.stream().mapToInt(i -&gt; i.tableName.length()).max().orElse(5));</span>
+<span class="nc" id="L397">        int sepLen = 1 + kindW + 2 + dbW + 2 + tableW + 2 + 60;</span>
+<span class="nc" id="L398">        String sep     = &quot; &quot; + &quot;─&quot;.repeat(sepLen);</span>
+<span class="nc" id="L399">        String hdrFmt  = &quot; %-&quot; + kindW + &quot;s  %-&quot; + dbW + &quot;s  %-&quot; + tableW + &quot;s  %s%n&quot;;</span>
+<span class="nc" id="L400">        String rowFmt  = hdrFmt;</span>
+
+        // ── Separator after progress bars ──────────────────────────────────────
+<span class="nc" id="L403">        System.out.println(sep);</span>
+<span class="nc" id="L404">        System.out.println();</span>
+
+        // ── VERIFY SUMMARY header + totals ─────────────────────────────────────
+<span class="nc" id="L407">        System.out.println(&quot; VERIFY SUMMARY&quot;);</span>
+<span class="nc" id="L408">        System.out.println(sep);</span>
+<span class="nc" id="L409">        StringBuilder globalLine = new StringBuilder(&quot; &quot;);</span>
+<span class="nc" id="L410">        globalLine.append(pending.size()).append(&quot; databases  &quot;)</span>
+<span class="nc" id="L411">                  .append(totalTables).append(&quot; tables  &quot;)</span>
+<span class="nc" id="L412">                  .append(&quot;OK: &quot;).append(totalOk);</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">        if (totalErr      &gt; 0) globalLine.append(&quot;  ERR: &quot;).append(totalErr);</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        if (totalSkip     &gt; 0) globalLine.append(&quot;  SKIP: &quot;).append(totalSkip);</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">        if (totalMismatch &gt; 0) globalLine.append(&quot;  MISMATCH: &quot;).append(totalMismatch);</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">        if (totalNote     &gt; 0) globalLine.append(&quot;  NOTE: &quot;).append(totalNote);</span>
+<span class="nc" id="L417">        System.out.println(globalLine);</span>
+<span class="nc" id="L418">        System.out.println(sep);</span>
+
+<span class="nc bnc" id="L420" title="All 2 branches missed.">        if (allIssues.isEmpty()) {</span>
+<span class="nc" id="L421">            System.out.println();</span>
+<span class="nc" id="L422">            return;</span>
+        }
+
+        // ── Issue table ────────────────────────────────────────────────────────
+<span class="nc" id="L426">        System.out.println();</span>
+<span class="nc" id="L427">        System.out.printf(hdrFmt, &quot;KIND&quot;, &quot;DB&quot;, &quot;TABLE&quot;, &quot;DETAIL&quot;);</span>
+<span class="nc" id="L428">        System.out.println(sep);</span>
+
+<span class="nc" id="L430">        List&lt;String&gt; kindOrder = List.of(&quot;NOTE&quot;, &quot;MISMATCH&quot;, &quot;SKIP&quot;, &quot;ERROR&quot;);</span>
+<span class="nc" id="L431">        boolean firstGroup = true;</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">        for (String kind : kindOrder) {</span>
+<span class="nc" id="L433">            List&lt;IssueRow&gt; group = allIssues.stream()</span>
+<span class="nc" id="L434">                    .filter(r -&gt; kind.equals(r.kind)).collect(Collectors.toList());</span>
+<span class="nc bnc" id="L435" title="All 2 branches missed.">            if (group.isEmpty()) continue;</span>
+<span class="nc bnc" id="L436" title="All 2 branches missed.">            if (!firstGroup) System.out.println(sep);</span>
+<span class="nc" id="L437">            firstGroup = false;</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            for (IssueRow r : group) {</span>
+<span class="nc" id="L439">                System.out.printf(rowFmt, r.kind, r.dbName, r.tableName, r.detail);</span>
+<span class="nc bnc" id="L440" title="All 2 branches missed.">                for (String line : r.extra) {</span>
+<span class="nc" id="L441">                    System.out.printf(rowFmt, &quot;&quot;, &quot;&quot;, &quot;&quot;, line);</span>
+<span class="nc" id="L442">                }</span>
+<span class="nc" id="L443">            }</span>
+<span class="nc" id="L444">        }</span>
+<span class="nc" id="L445">        System.out.println(sep);</span>
+<span class="nc" id="L446">        System.out.println();</span>
+<span class="nc" id="L447">    }</span>
+
+    // ── Logging &amp; progress helpers ────────────────────────────────────────────
+
+    /** Write a structured log line to the log file only (not stdout).
+     *  Format: [timestamp] [LEVEL] [&quot;message&quot;] [key=val] ...
+     *  fields must be alternating key, value pairs. */
+    private void flog(String level, String message, Object... fields) {
+<span class="nc bnc" id="L455" title="All 2 branches missed.">        if (fileLog == null) return;</span>
+<span class="nc" id="L456">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L457">        sb.append('[').append(ZonedDateTime.now().format(TS)).append(']');</span>
+<span class="nc" id="L458">        sb.append(&quot; [&quot;).append(level).append(']');</span>
+<span class="nc" id="L459">        sb.append(&quot; [\&quot;&quot;).append(message).append(&quot;\&quot;]&quot;);</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">        for (int i = 0; i + 1 &lt; fields.length; i += 2) {</span>
+<span class="nc" id="L461">            String k = String.valueOf(fields[i]);</span>
+<span class="nc" id="L462">            String v = String.valueOf(fields[i + 1]);</span>
+<span class="nc bnc" id="L463" title="All 4 branches missed.">            boolean quote = v.contains(&quot; &quot;) || v.isEmpty();</span>
+<span class="nc" id="L464">            sb.append(&quot; [&quot;).append(k).append('=');</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">            if (quote) sb.append('&quot;').append(v).append('&quot;');</span>
+<span class="nc" id="L466">            else       sb.append(v);</span>
+<span class="nc" id="L467">            sb.append(']');</span>
+        }
+<span class="nc" id="L469">        fileLog.println(sb);</span>
+<span class="nc" id="L470">    }</span>
+
+    /** Last progress line length — used to pad/erase on overwrite. */
+<span class="nc" id="L473">    private int lastProgressLen = 0;</span>
+    /** Fixed width for the db name column in the progress bar. */
+<span class="nc" id="L475">    private int dbNameWidth = 0;</span>
+
+    /**
+     * Render an in-place progress bar on stdout.
+     * Uses \r to overwrite the current line — no newline is emitted.
+     *
+     * @param dbName   database being converted
+     * @param done     tables completed so far (0-based: pass i before processing table i)
+     * @param total    total tables
+     * @param current  name of the table currently being processed
+     */
+    private void printProgress(String dbName, int done, int total, int skipCount, String current) {
+<span class="nc" id="L487">        int barWidth = 20;</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        int filled = (total == 0) ? barWidth : (int) Math.round((double) done / total * barWidth);</span>
+<span class="nc" id="L489">        String bar = &quot;━&quot;.repeat(filled) + &quot;─&quot;.repeat(barWidth - filled);</span>
+<span class="nc" id="L490">        String line = String.format(&quot; %-&quot; + dbNameWidth + &quot;s  [%s]  %d/%d  %s&quot;, dbName, bar, done, total, current);</span>
+        // Pad to erase previous longer line
+<span class="nc bnc" id="L492" title="All 2 branches missed.">        if (line.length() &lt; lastProgressLen) {</span>
+<span class="nc" id="L493">            line = line + &quot; &quot;.repeat(lastProgressLen - line.length());</span>
+        }
+<span class="nc" id="L495">        lastProgressLen = line.length();</span>
+<span class="nc" id="L496">        System.out.print(&quot;\r&quot; + line);</span>
+<span class="nc" id="L497">        System.out.flush();</span>
+<span class="nc" id="L498">    }</span>
+
+    /** Erase the progress line (call before printing multi-line output). */
+    private void clearProgress() {
+<span class="nc bnc" id="L502" title="All 2 branches missed.">        if (lastProgressLen &gt; 0) {</span>
+<span class="nc" id="L503">            System.out.print(&quot;\r&quot; + &quot; &quot;.repeat(lastProgressLen) + &quot;\r&quot;);</span>
+<span class="nc" id="L504">            System.out.flush();</span>
+<span class="nc" id="L505">            lastProgressLen = 0;</span>
+        }
+<span class="nc" id="L507">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

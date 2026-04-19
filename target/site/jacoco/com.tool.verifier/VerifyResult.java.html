@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>VerifyResult.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">sqlserver-to-tidb</a> &gt; <a href="index.source.html" class="el_package">com.tool.verifier</a> &gt; <span class="el_source">VerifyResult.java</span></div><h1>VerifyResult.java</h1><pre class="source lang-java linenums">package com.tool.verifier;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * 单张表的 schema 校验结果。
+ * msXxx = SQL Server 侧值，tidbXxx = TiDB 侧值。
+ * FK 和 CHECK 均在迁移时丢弃，不参与 MISMATCH 判定。
+ */
+<span class="fc" id="L12">public record VerifyResult(</span>
+        String fullTableName,              // e.g. &quot;dbo.users&quot;
+        int msCols,
+        int tidbCols,
+        List&lt;String&gt; msColOrder,           // 按 column_id 排序的列名
+        List&lt;String&gt; tidbColOrder,         // 按 ORDINAL_POSITION 排序的列名
+        List&lt;String&gt; msPkCols,             // 按 key_ordinal 排序
+        List&lt;String&gt; tidbPkCols,           // 按 KEY_SEQ 排序
+        Set&lt;String&gt; msIdxNames,            // 非主键、非丢弃的索引名
+        Set&lt;String&gt; msDroppedIdxNames,     // 迁移时已丢弃的索引名 (COLUMNSTORE / FULLTEXT)
+        Set&lt;String&gt; tidbIdxNames,          // TiDB 侧非主键索引名
+        int msChecks,
+        int tidbChecks,
+        int msNotNull,
+        int tidbNotNull,
+        String msAiCol,                    // null 表示无 AI 列
+        String tidbAiCol,                  // null 表示无 AI 列
+        Map&lt;String, String&gt; msDefaults,    // colName → 归一化后的默认值（null 表示无默认值）
+        Map&lt;String, String&gt; tidbDefaults,  // colName → TiDB 实际默认值
+        Map&lt;String, String&gt; msColTypes,    // colName (lower) → SQL Server 列类型字符串，如 &quot;nvarchar(max)&quot;
+        Map&lt;String, String&gt; tidbColTypes   // colName (lower) → TiDB 列类型字符串，如 &quot;LONGTEXT&quot;
+) {
+    // ── 兼容旧调用：从有序列名 List 派生出 Set ────────────────────────────────
+<span class="fc" id="L35">    public Set&lt;String&gt; msColNames()   { return new java.util.LinkedHashSet&lt;&gt;(msColOrder); }</span>
+<span class="fc" id="L36">    public Set&lt;String&gt; tidbColNames() { return new java.util.LinkedHashSet&lt;&gt;(tidbColOrder); }</span>
+
+    /**
+     * 任意非 FK / 非 CHECK、且不属于&quot;预期内已知 loss&quot;的指标不一致则返回 true。
+     * CHECK 不参与判定：TiDB 不强制 CHECK，约束已在迁移时丢弃。
+     * 已知 loss（UUID() dropped、UTC_TIMESTAMP 替换等）不算 MISMATCH，
+     * 通过 hasKnownLoss() / knownLossLines() 单独报告。
+     */
+    public boolean isMismatch() {
+<span class="fc bfc" id="L45" title="All 2 branches covered.">        return msCols != tidbCols</span>
+<span class="fc bfc" id="L46" title="All 2 branches covered.">                || !msColOrder.equals(tidbColOrder)</span>
+<span class="fc bfc" id="L47" title="All 2 branches covered.">                || !msPkCols.equals(tidbPkCols)</span>
+<span class="fc bfc" id="L48" title="All 4 branches covered.">                || hasUnexpectedIdxMismatch()</span>
+                || msNotNull != tidbNotNull
+<span class="fc bfc" id="L50" title="All 2 branches covered.">                || !java.util.Objects.equals(msAiCol, tidbAiCol)</span>
+<span class="fc bfc" id="L51" title="All 2 branches covered.">                || hasUnexpectedDefaultMismatch();</span>
+    }
+
+    /**
+     * 有需要告知用户的预期内损失（东西被丢掉了）。
+     * 纯替换（UTC_TIMESTAMP→CURRENT_TIMESTAMP、CURRENT_TIMESTAMP→CURRENT_DATE）不算，不报。
+     */
+    public boolean hasKnownLoss() {
+<span class="fc bfc" id="L59" title="All 4 branches covered.">        return !msDroppedIdxNames.isEmpty() || hasDroppedDefault();</span>
+    }
+
+    // ── 索引：只比较&quot;保留&quot;索引；丢弃的走 knownLoss ─────────────────────────
+
+    private boolean hasUnexpectedIdxMismatch() {
+        // 大小写不敏感比较（TiDB 会将索引名小写存储）
+<span class="fc" id="L66">        Set&lt;String&gt; msLower = msIdxNames.stream()</span>
+<span class="fc" id="L67">                .map(String::toLowerCase).collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));</span>
+<span class="fc" id="L68">        Set&lt;String&gt; tidbLower = tidbIdxNames.stream()</span>
+<span class="fc" id="L69">                .map(String::toLowerCase).collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));</span>
+<span class="fc bfc" id="L70" title="All 2 branches covered.">        return !msLower.equals(tidbLower);</span>
+    }
+
+    // ── 默认值：区分&quot;已知转换&quot;和&quot;真正不同&quot; ──────────────────────────────────
+
+    private boolean hasUnexpectedDefaultMismatch() {
+<span class="fc bfc" id="L76" title="All 2 branches covered.">        for (String col : msColOrder) {</span>
+<span class="fc" id="L77">            String msD = msDefaults.getOrDefault(col, null);</span>
+<span class="fc" id="L78">            String tdD = tidbDefaults.getOrDefault(col.toLowerCase(), null);</span>
+<span class="fc bfc" id="L79" title="All 6 branches covered.">            if (!defaultsEqual(msD, tdD) &amp;&amp; !isKnownConversion(msD, tdD) &amp;&amp; !isDroppedDefault(msD, tdD)) return true;</span>
+<span class="fc" id="L80">        }</span>
+<span class="fc" id="L81">        return false;</span>
+    }
+
+    /** UUID() 被丢弃（TiDB 侧无默认值）—— 需要报 LOSS。 */
+    private boolean hasDroppedDefault() {
+<span class="fc bfc" id="L86" title="All 2 branches covered.">        for (String col : msColOrder) {</span>
+<span class="fc" id="L87">            String msD = msDefaults.getOrDefault(col, null);</span>
+<span class="fc" id="L88">            String tdD = tidbDefaults.getOrDefault(col.toLowerCase(), null);</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">            if (isDroppedDefault(msD, tdD)) return true;</span>
+<span class="fc" id="L90">        }</span>
+<span class="fc" id="L91">        return false;</span>
+    }
+
+    /**
+     * 返回所有真正差异描述（MISMATCH 用），供打印使用。
+     * 不包含已知 loss 行。
+     */
+    public List&lt;String&gt; diffLines() {
+<span class="fc" id="L99">        List&lt;String&gt; lines = new java.util.ArrayList&lt;&gt;();</span>
+
+        // 列名差异（不区分顺序）
+<span class="pc bpc" id="L102" title="1 of 4 branches missed.">        if (msCols != tidbCols || !msColNames().equals(tidbColNames())) {</span>
+<span class="fc" id="L103">            Set&lt;String&gt; missing = new java.util.LinkedHashSet&lt;&gt;(msColNames());</span>
+<span class="fc" id="L104">            missing.removeAll(tidbColNames());</span>
+<span class="fc" id="L105">            Set&lt;String&gt; extra = new java.util.LinkedHashSet&lt;&gt;(tidbColNames());</span>
+<span class="fc" id="L106">            extra.removeAll(msColNames());</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">            if (!missing.isEmpty()) lines.add(&quot;missing cols: &quot; + missing);</span>
+<span class="fc bfc" id="L108" title="All 2 branches covered.">            if (!extra.isEmpty())   lines.add(&quot;extra cols: &quot; + extra);</span>
+        }
+
+        // 列顺序差异
+<span class="fc bfc" id="L112" title="All 4 branches covered.">        if (msColNames().equals(tidbColNames()) &amp;&amp; !msColOrder.equals(tidbColOrder)) {</span>
+<span class="pc bpc" id="L113" title="1 of 2 branches missed.">            for (int i = 0; i &lt; Math.min(msColOrder.size(), tidbColOrder.size()); i++) {</span>
+<span class="fc bfc" id="L114" title="All 2 branches covered.">                if (!msColOrder.get(i).equalsIgnoreCase(tidbColOrder.get(i))) {</span>
+<span class="fc" id="L115">                    lines.add(&quot;col order mismatch at pos &quot; + (i + 1)</span>
+<span class="fc" id="L116">                            + &quot;: MS=&quot; + msColOrder.get(i) + &quot; TiDB=&quot; + tidbColOrder.get(i));</span>
+<span class="fc" id="L117">                    break;</span>
+                }
+            }
+        }
+
+<span class="fc bfc" id="L122" title="All 2 branches covered.">        if (!msPkCols.equals(tidbPkCols)) {</span>
+<span class="fc" id="L123">            lines.add(&quot;pk mismatch: MS=&quot; + msPkCols + &quot; TiDB=&quot; + tidbPkCols);</span>
+        }
+
+        // 索引差异（仅保留索引，大小写不敏感）
+<span class="fc bfc" id="L127" title="All 2 branches covered.">        if (hasUnexpectedIdxMismatch()) {</span>
+<span class="fc" id="L128">            Set&lt;String&gt; tidbLower = tidbIdxNames.stream()</span>
+<span class="fc" id="L129">                    .map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());</span>
+<span class="fc" id="L130">            Set&lt;String&gt; msLower2  = msIdxNames.stream()</span>
+<span class="fc" id="L131">                    .map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());</span>
+<span class="fc" id="L132">            Set&lt;String&gt; missing = msIdxNames.stream()</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">                    .filter(n -&gt; !tidbLower.contains(n.toLowerCase()))</span>
+<span class="fc" id="L134">                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));</span>
+<span class="fc" id="L135">            Set&lt;String&gt; extra = tidbIdxNames.stream()</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">                    .filter(n -&gt; !msLower2.contains(n.toLowerCase()))</span>
+<span class="fc" id="L137">                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));</span>
+<span class="pc bpc" id="L138" title="1 of 2 branches missed.">            if (!missing.isEmpty()) lines.add(&quot;idx missing in TiDB: &quot; + missing);</span>
+<span class="pc bpc" id="L139" title="1 of 2 branches missed.">            if (!extra.isEmpty())   lines.add(&quot;idx extra in TiDB: &quot; + extra);</span>
+        }
+
+        // CHECK not compared — TiDB discards check constraints during migration
+<span class="fc bfc" id="L143" title="All 2 branches covered.">        if (msNotNull != tidbNotNull) {</span>
+<span class="fc" id="L144">            lines.add(&quot;notnull mismatch: MS=&quot; + msNotNull + &quot; TiDB=&quot; + tidbNotNull);</span>
+        }
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        if (!java.util.Objects.equals(msAiCol, tidbAiCol)) {</span>
+<span class="pc bpc" id="L147" title="1 of 2 branches missed.">            lines.add(&quot;ai mismatch: MS=&quot; + (msAiCol != null ? msAiCol : &quot;(none)&quot;)</span>
+<span class="pc bpc" id="L148" title="1 of 2 branches missed.">                    + &quot; TiDB=&quot; + (tidbAiCol != null ? tidbAiCol : &quot;(none)&quot;));</span>
+        }
+
+        // 默认值差异（仅预期外）
+<span class="fc bfc" id="L152" title="All 2 branches covered.">        for (String col : msColOrder) {</span>
+<span class="fc" id="L153">            String msD = msDefaults.getOrDefault(col, null);</span>
+<span class="fc" id="L154">            String tdD = tidbDefaults.getOrDefault(col.toLowerCase(), null);</span>
+<span class="pc bpc" id="L155" title="1 of 6 branches missed.">            if (!defaultsEqual(msD, tdD) &amp;&amp; !isDroppedDefault(msD, tdD) &amp;&amp; !isKnownConversion(msD, tdD)) {</span>
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">                lines.add(defaultLabel(col) + &quot;: MS=&quot; + (msD != null ? msD : &quot;(none)&quot;)</span>
+<span class="pc bpc" id="L157" title="1 of 2 branches missed.">                        + &quot; TiDB=&quot; + (tdD != null ? tdD : &quot;(none)&quot;));</span>
+            }
+<span class="fc" id="L159">        }</span>
+
+<span class="fc" id="L161">        return lines;</span>
+    }
+
+    /**
+     * 返回所有预期内差异描述（LOSS 用）。
+     */
+    public List&lt;String&gt; knownLossLines() {
+<span class="fc" id="L168">        List&lt;String&gt; lines = new java.util.ArrayList&lt;&gt;();</span>
+
+        // 已丢弃的索引
+<span class="fc bfc" id="L171" title="All 2 branches covered.">        if (!msDroppedIdxNames.isEmpty()) {</span>
+<span class="fc" id="L172">            lines.add(&quot;idx dropped (not supported in TiDB): &quot; + msDroppedIdxNames);</span>
+        }
+
+        // 已知默认值丢弃（仅 UUID() 等被删去的，不包括预期内替换）
+<span class="fc bfc" id="L176" title="All 2 branches covered.">        for (String col : msColOrder) {</span>
+<span class="fc" id="L177">            String msD = msDefaults.getOrDefault(col, null);</span>
+<span class="fc" id="L178">            String tdD = tidbDefaults.getOrDefault(col.toLowerCase(), null);</span>
+<span class="fc bfc" id="L179" title="All 4 branches covered.">            if (!defaultsEqual(msD, tdD) &amp;&amp; isDroppedDefault(msD, tdD)) {</span>
+<span class="pc bpc" id="L180" title="1 of 2 branches missed.">                lines.add(defaultLabel(col) + &quot;: MS=&quot; + (msD != null ? msD : &quot;(none)&quot;)</span>
+<span class="pc bpc" id="L181" title="1 of 2 branches missed.">                        + &quot; → TiDB=&quot; + (tdD != null ? tdD : &quot;(none)&quot;));</span>
+            }
+<span class="fc" id="L183">        }</span>
+
+<span class="fc" id="L185">        return lines;</span>
+    }
+
+    // ── 判断是否属于已知转换导致的差异 ─────────────────────────────────────────
+
+    /** 构建 &quot;default[col] (msType → tidbType)&quot; 或 &quot;default[col]&quot; 标签。 */
+    private String defaultLabel(String col) {
+<span class="fc" id="L192">        String msType  = msColTypes.getOrDefault(col.toLowerCase(), null);</span>
+<span class="fc" id="L193">        String tdType  = tidbColTypes.getOrDefault(col.toLowerCase(), null);</span>
+<span class="pc bpc" id="L194" title="1 of 4 branches missed.">        if (msType != null || tdType != null) {</span>
+<span class="pc bpc" id="L195" title="2 of 4 branches missed.">            String hint = (msType != null ? msType : &quot;?&quot;) + &quot; → &quot; + (tdType != null ? tdType : &quot;?&quot;);</span>
+<span class="fc" id="L196">            return &quot;default[&quot; + col + &quot;] (&quot; + hint + &quot;)&quot;;</span>
+        }
+<span class="fc" id="L198">        return &quot;default[&quot; + col + &quot;]&quot;;</span>
+    }
+
+    /**
+     * 默认值被真正丢弃（TiDB 侧无对应默认值）——需要报 LOSS。
+     * UUID() 会被丢弃；其他无法转换的函数/表达式也会被丢弃。
+     */
+    private static boolean isDroppedDefault(String msD, String tdD) {
+<span class="fc bfc" id="L206" title="All 2 branches covered.">        if (msD == null) return false;</span>
+        // Normalise first — empty / blank after normalisation means &quot;no default&quot;; not a loss.
+<span class="fc" id="L208">        String msNorm = normalize(msD);</span>
+<span class="pc bpc" id="L209" title="1 of 2 branches missed.">        if (msNorm == null) return false;</span>
+        // TiDB side must also have no default for this to be a &quot;dropped&quot; case.
+<span class="pc bpc" id="L211" title="1 of 4 branches missed.">        if (tdD != null &amp;&amp; !tdD.isBlank()) return false;</span>
+        // Anything remaining: MS had a meaningful default, TiDB has none → loss.
+<span class="fc" id="L213">        return true;</span>
+    }
+
+    /**
+     * 预期内的静默转换（converter 有意替换，语义等价或已知降级）——既不报 MISMATCH 也不报 LOSS。
+     * msD 是归一化后的 SQL Server 值，tdD 是 TiDB 实际值。
+     */
+    private static boolean isKnownConversion(String msD, String tdD) {
+<span class="pc bpc" id="L221" title="1 of 2 branches missed.">        if (msD == null) return false;</span>
+<span class="fc" id="L222">        String ms = msD.trim().toUpperCase();</span>
+
+        // SS explicit NULL default → TiDB has no default entry (nullable column)
+<span class="pc bpc" id="L225" title="5 of 6 branches missed.">        if (&quot;NULL&quot;.equals(ms) &amp;&amp; (tdD == null || tdD.isBlank())) return true;</span>
+
+<span class="fc bfc" id="L227" title="All 2 branches covered.">        if (tdD == null) return false;</span>
+<span class="fc" id="L228">        String td = tdD.trim().toUpperCase();</span>
+
+        // UTC_TIMESTAMP() → CURRENT_TIMESTAMP 或 CURRENT_TIMESTAMP(n)
+<span class="pc bpc" id="L231" title="1 of 4 branches missed.">        if (&quot;UTC_TIMESTAMP()&quot;.equals(ms) &amp;&amp; td.startsWith(&quot;CURRENT_TIMESTAMP&quot;)) return true;</span>
+
+        // CURRENT_TIMESTAMP → CURRENT_DATE（DATE 列 CURDATE() 在 TiDB 展示为 CURRENT_DATE）
+<span class="pc bpc" id="L234" title="1 of 4 branches missed.">        if (&quot;CURRENT_TIMESTAMP&quot;.equals(ms) &amp;&amp; &quot;CURRENT_DATE&quot;.equals(td)) return true;</span>
+
+<span class="fc" id="L236">        return false;</span>
+    }
+
+    /** 大小写不敏感地比较两个默认值，null 和空字符串视为等价；去掉 SS 包裹的单引号再比 */
+    private static boolean defaultsEqual(String a, String b) {
+        // Strip SQL Server single-quote wrapping first (e.g. '' → &quot;&quot;, 'CN' → CN),
+        // then treat null and blank-after-strip as equivalent.
+<span class="fc" id="L243">        String na = normalize(a);</span>
+<span class="fc" id="L244">        String nb = normalize(b);</span>
+<span class="pc bpc" id="L245" title="1 of 4 branches missed.">        if (na == null &amp;&amp; nb == null) return true;</span>
+<span class="pc bpc" id="L246" title="1 of 4 branches missed.">        if (na == null || nb == null) return false;</span>
+<span class="fc bfc" id="L247" title="All 2 branches covered.">        if (na.equalsIgnoreCase(nb)) return true;</span>
+        // CURRENT_TIMESTAMP and CURRENT_TIMESTAMP(n) are equivalent
+<span class="fc" id="L249">        String naBase = na.replaceAll(&quot;(?i)^CURRENT_TIMESTAMP\\(\\d+\\)$&quot;, &quot;CURRENT_TIMESTAMP&quot;);</span>
+<span class="fc" id="L250">        String nbBase = nb.replaceAll(&quot;(?i)^CURRENT_TIMESTAMP\\(\\d+\\)$&quot;, &quot;CURRENT_TIMESTAMP&quot;);</span>
+<span class="fc" id="L251">        return naBase.equalsIgnoreCase(nbBase);</span>
+    }
+
+    private static String normalize(String s) {
+<span class="fc bfc" id="L255" title="All 2 branches covered.">        if (s == null) return null;</span>
+<span class="fc" id="L256">        String v = stripQuotes(s.trim());</span>
+<span class="fc bfc" id="L257" title="All 2 branches covered.">        return v.isEmpty() ? null : v;</span>
+    }
+
+    private static String stripQuotes(String s) {
+<span class="pc bpc" id="L261" title="1 of 6 branches missed.">        if (s.length() &gt;= 2 &amp;&amp; s.startsWith(&quot;'&quot;) &amp;&amp; s.endsWith(&quot;'&quot;))</span>
+<span class="fc" id="L262">            return s.substring(1, s.length() - 1);</span>
+<span class="fc" id="L263">        return s;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

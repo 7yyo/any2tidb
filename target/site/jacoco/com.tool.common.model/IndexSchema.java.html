@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IndexSchema.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">sqlserver-to-tidb</a> &gt; <a href="index.source.html" class="el_package">com.tool.common.model</a> &gt; <span class="el_source">IndexSchema.java</span></div><h1>IndexSchema.java</h1><pre class="source lang-java linenums">package com.tool.common.model;
+
+import java.util.List;
+
+public class IndexSchema {
+    private String name;
+    private boolean unique;
+    private boolean clustered;
+    private boolean fulltext;
+    private boolean columnstore;
+    private List&lt;String&gt; columns;
+    private List&lt;String&gt; includeColumns;  // INCLUDE clause columns
+    private String filterDefinition;      // WHERE clause for filtered indexes
+
+<span class="fc" id="L15">    public IndexSchema() {}</span>
+
+<span class="fc" id="L17">    public String getName() { return name; }</span>
+<span class="fc" id="L18">    public void setName(String name) { this.name = name; }</span>
+<span class="fc" id="L19">    public boolean isUnique() { return unique; }</span>
+<span class="fc" id="L20">    public void setUnique(boolean unique) { this.unique = unique; }</span>
+<span class="fc" id="L21">    public boolean isClustered() { return clustered; }</span>
+<span class="fc" id="L22">    public void setClustered(boolean clustered) { this.clustered = clustered; }</span>
+<span class="fc" id="L23">    public boolean isFulltext() { return fulltext; }</span>
+<span class="fc" id="L24">    public void setFulltext(boolean fulltext) { this.fulltext = fulltext; }</span>
+<span class="fc" id="L25">    public boolean isColumnstore() { return columnstore; }</span>
+<span class="fc" id="L26">    public void setColumnstore(boolean columnstore) { this.columnstore = columnstore; }</span>
+<span class="fc" id="L27">    public List&lt;String&gt; getColumns() { return columns; }</span>
+<span class="fc" id="L28">    public void setColumns(List&lt;String&gt; columns) { this.columns = columns; }</span>
+<span class="fc" id="L29">    public List&lt;String&gt; getIncludeColumns() { return includeColumns; }</span>
+<span class="fc" id="L30">    public void setIncludeColumns(List&lt;String&gt; includeColumns) { this.includeColumns = includeColumns; }</span>
+<span class="fc" id="L31">    public String getFilterDefinition() { return filterDefinition; }</span>
+<span class="fc" id="L32">    public void setFilterDefinition(String filterDefinition) { this.filterDefinition = filterDefinition; }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

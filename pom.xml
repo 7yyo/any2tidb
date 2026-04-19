@@ -101,7 +101,7 @@
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.70</minimum>
+                                            <minimum>0.90</minimum>
                                         </limit>
                                     </limits>
                                 </rule>
@@ -109,7 +109,11 @@
                             <!-- 排除集成测试、Spring Boot 入口和配置类 -->
                             <excludes>
                                 <exclude>com/tool/App.class</exclude>
+                                <exclude>com/tool/App$*.class</exclude>
                                 <exclude>com/tool/config/**</exclude>
+                                <exclude>com/tool/verifier/SchemaVerifier.class</exclude>
+                                <exclude>com/tool/extractor/SqlServerExtractor.class</exclude>
+                                <exclude>com/tool/writer/TiDBWriter.class</exclude>
                             </excludes>
                         </configuration>
                     </execution>

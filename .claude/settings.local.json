@@ -17,7 +17,25 @@
       "Bash(java -jar /home/sev7nyo/ms2tidb/target/sqlserver-to-tidb-1.0.0.jar --dry-run)",
       "Bash(sudo dnf *)",
       "Bash(podman pull *)",
-      "Bash(mysql8.4 *)"
+      "Bash(mysql8.4 *)",
+      "Bash(/opt/mssql-tools18/bin/sqlcmd *)",
+      "Bash(podman exec *)",
+      "Bash(mvn -q package -DskipTests)",
+      "Bash(mvn -q package)",
+      "Bash(mvn -q test)",
+      "Bash(mysql *)",
+      "Skill(code-review:code-review)",
+      "Bash(java -jar dist/sqlserver-to-tidb-1.0.0.jar --sqlserver.password=Test1234!)",
+      "Bash(java -jar dist/sqlserver-to-tidb-1.0.0.jar --sqlserver.password=Test1234! --convert.schemas=hr --convert.tables=employees --dry-run)",
+      "Bash(java -jar dist/sqlserver-to-tidb-1.0.0.jar --sqlserver.password=Test1234! --convert.drop-if-exists=true)",
+      "Bash(sqlcmd *)",
+      "Bash(mvn spring-boot:run -q)",
+      "Bash(mvn spring-boot:run -q -Dspring-boot.run.arguments=\"--convert.drop-if-exists=true\")",
+      "Bash(grep -v \"^To see\\\\|^Re-run\\\\|^For more\\\\|^$\\\\|Help 1\\\\|MojoExecution\")",
+      "Bash(mvn spring-boot:run -q -Dspring-boot.run.arguments=\"--dry-run --convert.schemas=dbo --convert.tables=edge_datetime2,edge_defaults,edge_warn_types\")",
+      "Bash(java -jar sqlserver-to-tidb-1.0.0.jar --spring.config.location=application.yml)",
+      "Bash(grep -v \"^\\\\s*$\")",
+      "Bash(mvn test-compile *)"
     ]
   }
 }

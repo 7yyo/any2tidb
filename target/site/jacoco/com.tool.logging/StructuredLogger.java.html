@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StructuredLogger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">sqlserver-to-tidb</a> &gt; <a href="index.source.html" class="el_package">com.tool.logging</a> &gt; <span class="el_source">StructuredLogger.java</span></div><h1>StructuredLogger.java</h1><pre class="source lang-java linenums">package com.tool.logging;
+
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * Writes structured log lines to a file (append mode).
+ * Format: [timestamp] [LEVEL] [&quot;message&quot;] [key=value] ...
+ * All writes go to the file only — never to stdout.
+ *
+ * &lt;p&gt;Not thread-safe; call only from a single thread.&lt;/p&gt;
+ */
+public class StructuredLogger implements AutoCloseable {
+
+<span class="nc" id="L17">    private static final DateTimeFormatter TIMESTAMP_FORMATTER =</span>
+<span class="nc" id="L18">            DateTimeFormatter.ofPattern(&quot;yyyy/MM/dd HH:mm:ss.SSS Z&quot;);</span>
+
+    private final PrintWriter out;
+
+    /** Open (or create) the given log file in append mode. Falls back to no-op on failure. */
+    public static StructuredLogger open(String path) {
+        try {
+<span class="nc" id="L25">            return new StructuredLogger(new PrintWriter(new FileWriter(path, true), true));</span>
+<span class="nc" id="L26">        } catch (Exception e) {</span>
+<span class="nc" id="L27">            System.err.println(&quot;[StructuredLogger] WARNING: could not open '&quot; + path</span>
+<span class="nc" id="L28">                    + &quot;': &quot; + e.getMessage() + &quot; — falling back to no-op&quot;);</span>
+<span class="nc" id="L29">            return new StructuredLogger(new PrintWriter(PrintWriter.nullWriter()));</span>
+        }
+    }
+
+<span class="nc" id="L33">    private StructuredLogger(PrintWriter out) {</span>
+<span class="nc" id="L34">        this.out = out;</span>
+<span class="nc" id="L35">    }</span>
+
+    /**
+     * Write one log line.
+     *
+     * @param level   e.g. &quot;INFO&quot;, &quot;WARN&quot;, &quot;ERROR&quot;
+     * @param message free-text message
+     * @param fields  alternating key-value pairs — must have an even number of elements
+     * @throws IllegalArgumentException if {@code fields} has an odd length
+     */
+    public void log(String level, String message, Object... fields) {
+<span class="nc bnc" id="L46" title="All 2 branches missed.">        if (fields.length % 2 != 0) {</span>
+<span class="nc" id="L47">            throw new IllegalArgumentException(</span>
+                    &quot;fields must be key-value pairs; got &quot; + fields.length + &quot; element(s)&quot;);
+        }
+<span class="nc" id="L50">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L51">        sb.append('[').append(ZonedDateTime.now().format(TIMESTAMP_FORMATTER)).append(']');</span>
+<span class="nc" id="L52">        sb.append(&quot; [&quot;).append(level).append(']');</span>
+<span class="nc" id="L53">        sb.append(&quot; [\&quot;&quot;).append(message).append(&quot;\&quot;]&quot;);</span>
+<span class="nc bnc" id="L54" title="All 2 branches missed.">        for (int i = 0; i + 1 &lt; fields.length; i += 2) {</span>
+<span class="nc" id="L55">            String k = String.valueOf(fields[i]);</span>
+<span class="nc" id="L56">            String v = String.valueOf(fields[i + 1]);</span>
+<span class="nc bnc" id="L57" title="All 4 branches missed.">            boolean quote = v.contains(&quot; &quot;) || v.isEmpty();</span>
+<span class="nc" id="L58">            sb.append(&quot; [&quot;).append(k).append('=');</span>
+<span class="nc bnc" id="L59" title="All 2 branches missed.">            if (quote) sb.append('&quot;').append(v).append('&quot;');</span>
+<span class="nc" id="L60">            else       sb.append(v);</span>
+<span class="nc" id="L61">            sb.append(']');</span>
+        }
+<span class="nc" id="L63">        out.println(sb);</span>
+<span class="nc" id="L64">    }</span>
+
+    @Override
+    public void close() {
+<span class="nc" id="L68">        out.close();</span>
+<span class="nc" id="L69">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

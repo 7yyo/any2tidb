@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>TypeMapper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">sqlserver-to-tidb</a> &gt; <a href="index.source.html" class="el_package">com.tool.converter</a> &gt; <span class="el_source">TypeMapper.java</span></div><h1>TypeMapper.java</h1><pre class="source lang-java linenums">package com.tool.converter;
+
+import com.tool.model.ColumnSchema;
+import org.springframework.stereotype.Component;
+
+@Component
+<span class="fc" id="L7">public class TypeMapper {</span>
+
+<span class="fc" id="L9">    public record MappedType(String tidbType, boolean hasWarning, boolean skip, String warningMessage) {</span>
+<span class="fc" id="L10">        public static MappedType of(String type) { return new MappedType(type, false, false, null); }</span>
+<span class="fc" id="L11">        public static MappedType warn(String type, String msg) { return new MappedType(type, true, false, msg); }</span>
+<span class="fc" id="L12">        public static MappedType skip(String msg) { return new MappedType(null, true, true, msg); }</span>
+    }
+
+    public MappedType mapType(ColumnSchema col) {
+<span class="fc" id="L16">        String type = col.getSqlServerType().toLowerCase().trim();</span>
+<span class="fc" id="L17">        Integer len = col.getMaxLength();</span>
+<span class="fc" id="L18">        Integer prec = col.getPrecision();</span>
+<span class="fc" id="L19">        Integer scale = col.getScale();</span>
+
+<span class="fc bfc" id="L21" title="All 36 branches covered.">        return switch (type) {</span>
+<span class="fc" id="L22">            case &quot;int&quot;, &quot;integer&quot; -&gt; MappedType.of(&quot;INT&quot;);</span>
+<span class="fc" id="L23">            case &quot;bigint&quot; -&gt; MappedType.of(&quot;BIGINT&quot;);</span>
+<span class="fc" id="L24">            case &quot;smallint&quot; -&gt; MappedType.of(&quot;SMALLINT&quot;);</span>
+<span class="fc" id="L25">            case &quot;tinyint&quot; -&gt; MappedType.of(&quot;TINYINT UNSIGNED&quot;);</span>
+<span class="fc" id="L26">            case &quot;bit&quot; -&gt; MappedType.of(&quot;TINYINT(1)&quot;);</span>
+            case &quot;decimal&quot;, &quot;numeric&quot; -&gt; {
+<span class="pc bpc" id="L28" title="1 of 4 branches missed.">                int p = (prec != null &amp;&amp; prec &gt; 0) ? prec : 18;</span>
+<span class="fc bfc" id="L29" title="All 2 branches covered.">                int s = (scale != null) ? scale : 0;</span>
+<span class="fc" id="L30">                yield MappedType.of(&quot;DECIMAL(&quot; + p + &quot;,&quot; + s + &quot;)&quot;);</span>
+            }
+<span class="fc" id="L32">            case &quot;money&quot; -&gt; MappedType.warn(&quot;DECIMAL(19,4)&quot;, &quot;MONEY converted to DECIMAL(19,4)&quot;);</span>
+<span class="fc" id="L33">            case &quot;smallmoney&quot; -&gt; MappedType.warn(&quot;DECIMAL(10,4)&quot;, &quot;SMALLMONEY converted to DECIMAL(10,4)&quot;);</span>
+            case &quot;float&quot; -&gt; {
+                // SQL Server float(p): p &lt;= 24 = single-precision (4 bytes), p &gt; 24 = double-precision (8 bytes)
+                // TiDB FLOAT = single-precision, DOUBLE = double-precision
+<span class="pc bpc" id="L37" title="1 of 4 branches missed.">                int p = (prec != null &amp;&amp; prec &gt; 0) ? prec : 53; // default precision is 53 (double)</span>
+<span class="fc bfc" id="L38" title="All 2 branches covered.">                if (p &lt;= 24) {</span>
+<span class="fc" id="L39">                    yield MappedType.warn(&quot;FLOAT&quot;, &quot;FLOAT(&quot; + p + &quot;) is single-precision; stored as TiDB FLOAT (4 bytes) — precision may differ from SQL Server&quot;);</span>
+                } else {
+<span class="fc" id="L41">                    yield MappedType.of(&quot;DOUBLE&quot;);</span>
+                }
+            }
+<span class="fc" id="L44">            case &quot;real&quot; -&gt; MappedType.of(&quot;FLOAT&quot;);</span>
+<span class="fc" id="L45">            case &quot;date&quot; -&gt; MappedType.of(&quot;DATE&quot;);</span>
+<span class="fc" id="L46">            case &quot;time&quot; -&gt; MappedType.of(&quot;TIME&quot;);</span>
+<span class="fc" id="L47">            case &quot;datetime&quot;, &quot;smalldatetime&quot; -&gt; MappedType.of(&quot;DATETIME&quot;);</span>
+            case &quot;datetime2&quot; -&gt; {
+<span class="fc bfc" id="L49" title="All 4 branches covered.">                int fsp = (scale != null &amp;&amp; scale &gt; 0) ? Math.min(scale, 6) : 6;</span>
+<span class="fc bfc" id="L50" title="All 4 branches covered.">                boolean truncated = scale != null &amp;&amp; scale &gt; 6;</span>
+<span class="pc bpc" id="L51" title="1 of 2 branches missed.">                String tidbType = fsp &gt; 0 ? &quot;DATETIME(&quot; + fsp + &quot;)&quot; : &quot;DATETIME&quot;;</span>
+<span class="fc bfc" id="L52" title="All 2 branches covered.">                yield truncated</span>
+<span class="fc" id="L53">                        ? MappedType.warn(tidbType, &quot;DATETIME2(&quot; + scale + &quot;) converted to &quot; + tidbType + &quot; — fractional seconds truncated from &quot; + scale + &quot; to 6 digits&quot;)</span>
+<span class="fc" id="L54">                        : MappedType.of(tidbType);</span>
+            }
+<span class="fc" id="L56">            case &quot;datetimeoffset&quot; -&gt; MappedType.warn(&quot;DATETIME&quot;, &quot;DATETIMEOFFSET converted to DATETIME, timezone info lost&quot;);</span>
+<span class="pc bpc" id="L57" title="1 of 4 branches missed.">            case &quot;char&quot; -&gt; MappedType.of(&quot;CHAR(&quot; + (len != null &amp;&amp; len &gt; 0 ? len : 1) + &quot;)&quot;);</span>
+<span class="fc" id="L58">            case &quot;varchar&quot; -&gt; mapVarchar(len, false);</span>
+<span class="fc" id="L59">            case &quot;text&quot; -&gt; MappedType.warn(&quot;LONGTEXT&quot;, &quot;TEXT converted to LONGTEXT&quot;);</span>
+            case &quot;nchar&quot; -&gt; {
+<span class="pc bpc" id="L61" title="1 of 4 branches missed.">                int charLen = (len != null &amp;&amp; len &gt; 0) ? len / 2 : 1;</span>
+<span class="fc" id="L62">                yield MappedType.of(&quot;CHAR(&quot; + charLen + &quot;) CHARACTER SET utf8mb4&quot;);</span>
+            }
+<span class="fc" id="L64">            case &quot;nvarchar&quot; -&gt; mapVarchar(len, true);</span>
+<span class="fc" id="L65">            case &quot;ntext&quot; -&gt; MappedType.warn(&quot;LONGTEXT&quot;, &quot;NTEXT converted to LONGTEXT&quot;);</span>
+<span class="pc bpc" id="L66" title="1 of 4 branches missed.">            case &quot;binary&quot; -&gt; MappedType.of(&quot;BINARY(&quot; + (len != null &amp;&amp; len &gt; 0 ? len : 1) + &quot;)&quot;);</span>
+            case &quot;varbinary&quot; -&gt; {
+<span class="fc bfc" id="L68" title="All 4 branches covered.">                if (len != null &amp;&amp; len == -1) {</span>
+<span class="fc" id="L69">                    yield MappedType.warn(&quot;LONGBLOB&quot;, &quot;VARBINARY(MAX) converted to LONGBLOB&quot;);</span>
+                } else {
+<span class="pc bpc" id="L71" title="1 of 4 branches missed.">                    int vbLen = (len != null &amp;&amp; len &gt; 0) ? len : 1;</span>
+<span class="fc" id="L72">                    yield MappedType.of(&quot;VARBINARY(&quot; + vbLen + &quot;)&quot;);</span>
+                }
+            }
+<span class="fc" id="L75">            case &quot;image&quot; -&gt; MappedType.warn(&quot;LONGBLOB&quot;, &quot;IMAGE converted to LONGBLOB (deprecated type)&quot;);</span>
+<span class="fc" id="L76">            case &quot;uniqueidentifier&quot; -&gt; MappedType.warn(&quot;VARCHAR(36)&quot;, &quot;UNIQUEIDENTIFIER converted to VARCHAR(36)&quot;);</span>
+<span class="fc" id="L77">            case &quot;rowversion&quot;, &quot;timestamp&quot; -&gt; MappedType.warn(&quot;BIGINT UNSIGNED&quot;, &quot;ROWVERSION/TIMESTAMP (row version) converted to BIGINT UNSIGNED&quot;);</span>
+<span class="fc" id="L78">            case &quot;xml&quot; -&gt; MappedType.warn(&quot;LONGTEXT&quot;, &quot;XML converted to LONGTEXT&quot;);</span>
+<span class="fc" id="L79">            case &quot;json&quot; -&gt; MappedType.of(&quot;JSON&quot;);</span>
+<span class="fc" id="L80">            case &quot;vector&quot; -&gt; MappedType.warn(&quot;VECTOR&quot;, &quot;VECTOR requires TiDB v8.4+&quot;);</span>
+<span class="fc" id="L81">            case &quot;hierarchyid&quot; -&gt; MappedType.warn(&quot;VARCHAR(4000)&quot;, &quot;HIERARCHYID converted to VARCHAR(4000)&quot;);</span>
+<span class="fc" id="L82">            case &quot;geography&quot; -&gt; MappedType.warn(&quot;LONGBLOB&quot;, &quot;GEOGRAPHY converted to LONGBLOB (spatial operations not available in TiDB)&quot;);</span>
+<span class="fc" id="L83">            case &quot;geometry&quot; -&gt; MappedType.warn(&quot;LONGBLOB&quot;, &quot;GEOMETRY converted to LONGBLOB (spatial operations not available in TiDB)&quot;);</span>
+<span class="fc" id="L84">            case &quot;sql_variant&quot; -&gt; MappedType.warn(&quot;LONGTEXT&quot;, &quot;SQL_VARIANT converted to LONGTEXT&quot;);</span>
+<span class="fc" id="L85">            case &quot;sysname&quot; -&gt; MappedType.of(&quot;VARCHAR(128)&quot;);</span>
+<span class="fc" id="L86">            case &quot;cursor&quot;, &quot;table&quot; -&gt; MappedType.skip(type.toUpperCase() + &quot; is not applicable to table columns&quot;);</span>
+<span class="fc" id="L87">            default -&gt; MappedType.skip(&quot;Unknown type '&quot; + type + &quot;' — column skipped&quot;);</span>
+        };
+    }
+
+    private MappedType mapVarchar(Integer len, boolean unicode) {
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        String charset = unicode ? &quot; CHARACTER SET utf8mb4&quot; : &quot;&quot;;</span>
+<span class="pc bpc" id="L93" title="1 of 4 branches missed.">        if (len == null || len == -1) {</span>
+<span class="fc bfc" id="L94" title="All 2 branches covered.">            return MappedType.warn(&quot;LONGTEXT&quot;, (unicode ? &quot;NVARCHAR&quot; : &quot;VARCHAR&quot;) + &quot;(MAX) converted to LONGTEXT&quot;);</span>
+        }
+        // nvarchar stores 2 bytes per char; maxLength from sys.columns is in bytes
+<span class="fc bfc" id="L97" title="All 2 branches covered.">        int charLen = unicode ? len / 2 : len;</span>
+<span class="fc" id="L98">        return MappedType.of(&quot;VARCHAR(&quot; + charLen + &quot;)&quot; + charset);</span>
+    }
+
+    public String mapDefaultValue(String rawDefault) {
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        if (rawDefault == null) return null;</span>
+        // Strip SQL Server wrapping parens: ((value)) or (value)
+<span class="fc" id="L104">        String val = rawDefault.trim();</span>
+<span class="pc bpc" id="L105" title="1 of 4 branches missed.">        while (val.startsWith(&quot;(&quot;) &amp;&amp; val.endsWith(&quot;)&quot;)) {</span>
+<span class="fc" id="L106">            val = val.substring(1, val.length() - 1).trim();</span>
+        }
+<span class="pc bpc" id="L108" title="1 of 7 branches missed.">        return switch (val.toUpperCase()) {</span>
+<span class="fc" id="L109">            case &quot;GETDATE()&quot; -&gt; &quot;CURRENT_TIMESTAMP&quot;;</span>
+<span class="fc" id="L110">            case &quot;GETUTCDATE()&quot; -&gt; &quot;UTC_TIMESTAMP()&quot;;</span>
+<span class="fc" id="L111">            case &quot;NEWID()&quot; -&gt; &quot;UUID()&quot;;</span>
+<span class="fc" id="L112">            case &quot;NEWSEQUENTIALID()&quot; -&gt; &quot;UUID()&quot;;</span>
+<span class="fc" id="L113">            case &quot;SYSDATETIME()&quot; -&gt; &quot;CURRENT_TIMESTAMP&quot;;</span>
+<span class="nc" id="L114">            case &quot;SYSDATETIMEOFFSET()&quot; -&gt; &quot;CURRENT_TIMESTAMP&quot;;</span>
+<span class="fc" id="L115">            default -&gt; val;</span>
+        };
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.11.202310140853</span></div></body></html>

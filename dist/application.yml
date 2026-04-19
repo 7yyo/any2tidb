@@ -1,0 +1,59 @@
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │  SQL Server → TiDB  Schema Migration Tool — 完整配置说明               │
+# │                                                                         │
+# │  Usage（将 application.yml 与 jar 放同目录，直接运行）:                  │
+# │    java -jar sqlserver-to-tidb-1.0.0.jar                               │
+# │                                                                         │
+# │  Dry-run（只打印 DDL，不写入 TiDB）:                                    │
+# │    java -jar sqlserver-to-tidb-1.0.0.jar --dry-run                     │
+# │                                                                         │
+# │  命令行临时指定表（覆盖 convert.tables 配置）:                           │
+# │    java -jar sqlserver-to-tidb-1.0.0.jar --tables=orders,customers     │
+# │                                                                         │
+# │  配置文件不在当前目录时:                                                  │
+# │    java -jar sqlserver-to-tidb-1.0.0.jar \                             │
+# │         --spring.config.location=/path/to/application.yml              │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+source:
+  host: 127.0.0.1
+  port: 1433
+  username: sa
+  password: "Test1234!"
+
+target:
+  host: 127.0.0.1
+  port: 4000
+  username: root
+  password: ""
+
+convert:
+  # ── 场景 1：全实例迁移（所有用户库、所有 schema、所有表）────────────────────
+  schemas: []
+  tables: []
+
+  # ── 场景 2：按 schema 过滤（每个库只迁移指定 schema 下的表）─────────────────
+  #schemas:
+  #  - audit
+  #  - dbo
+  # tables: []
+
+  # ── 场景 3：按表名过滤（每个库里匹配指定表名，schema 不限）──────────────────
+  # schemas: []
+  # tables:
+  #   - orders
+  #   - customers
+  #   - products
+
+  # ── 场景 4：schema + 表名双重过滤（只迁移指定 schema 下的指定表）────────────
+  # schemas:
+  #   - sales
+  # tables:
+  #   - orders
+  #   - order_lines
+
+  # TiDB 中已存在同名表时先 DROP 再建（false = 保留已存在的表）
+  dropIfExists: true
+
+  # 遇到某张表失败时是否继续迁移剩余表（false = 遇到第一个错误就停止）
+  continueOnError: true

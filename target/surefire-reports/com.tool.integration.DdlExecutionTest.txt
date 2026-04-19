@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.tool.integration.DdlExecutionTest
+-------------------------------------------------------------------------------
+Tests run: 29, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 4.729 s -- in com.tool.integration.DdlExecutionTest
