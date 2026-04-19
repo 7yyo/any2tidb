@@ -291,9 +291,10 @@ class SchemaConverterTest {
         ConversionResult r = new ConversionResult("dbo.tbl");
         String ddl = converter.toCreateTableDDL(t, r, false);
         assertNotNull(ddl);
-        assertTrue(ddl.contains("CURTIME()"),
-                "TIME column with GETDATE() default should emit CURTIME(), got: " + ddl);
         assertFalse(ddl.contains("CURRENT_TIMESTAMP"),
                 "TIME column must not have CURRENT_TIMESTAMP default, got: " + ddl);
+        // TiDB does not support function-based defaults for TIME; default must be dropped or use a literal
+        assertFalse(ddl.contains("CURTIME()"),
+                "TIME column must not use CURTIME() as TiDB rejects it, got: " + ddl);
     }
 }

@@ -79,7 +79,10 @@ public class SchemaConverter {
                 if (tidbType.equals("DATE")) {
                     defaultVal = "CURDATE()";
                 } else if (tidbType.equals("TIME")) {
-                    defaultVal = "CURTIME()";
+                    // TiDB does not support function-based defaults for TIME; drop the default
+                    result.addWarning("column '" + col.getName() + "': TIME column default '" + rawDefault
+                            + "' cannot be expressed as a TiDB function default — default dropped");
+                    defaultVal = null;
                 }
             }
             if (defaultVal != null && !col.isIdentity()) {
