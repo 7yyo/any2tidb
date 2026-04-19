@@ -804,4 +804,28 @@ class DdlExecutionTest {
         }
         drop(tn);
     }
+
+    /**
+     * DE29: DATETIME2 precision matrix × GETDATE() default.
+     * For each scale 1..6: column is DATETIME(n), default must be CURRENT_TIMESTAMP(n).
+     * TiDB Error 1067 if precision doesn't match.
+     */
+    @Test @Order(29)
+    void de29_datetime2PrecisionMatrix_withGetdateDefault() throws Exception {
+        String tn = "de_dt_matrix";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        java.util.List<ColumnSchema> cols = new java.util.ArrayList<>();
+        cols.add(id);
+        for (int scale = 1; scale <= 6; scale++) {
+            cols.add(colDefaultScale("dt" + scale, "datetime2", scale, false, "(getdate())"));
+        }
+        TableSchema t = table(tn, cols, List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATETIME2 precision 1-6 with GETDATE() default must all execute without Error 1067. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
