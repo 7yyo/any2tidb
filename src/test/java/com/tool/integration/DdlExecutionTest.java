@@ -623,4 +623,25 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE22: TIME column with GETDATE() default.
+     * TypeMapper maps GETDATE() → CURRENT_TIMESTAMP.
+     * TiDB may reject DEFAULT CURRENT_TIMESTAMP on a TIME column.
+     */
+    @Test @Order(22)
+    void de22_timeColumnWithGetdateDefault() throws Exception {
+        String tn = "de_time_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema t_col = colDefault("event_time", "time", true, "(getdate())");
+
+        TableSchema t = table(tn, List.of(id, t_col), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "TIME + GETDATE() default should not produce a fatal DDL error. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
