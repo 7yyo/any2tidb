@@ -37,8 +37,7 @@ public final class CsvValueFormatter {
             raw = Base64.getEncoder().encodeToString(bytes);
         } else if (value instanceof Timestamp ts) {
             // Format: yyyy-MM-dd HH:mm:ss.SSS (always 3 fractional digits)
-            long millis = ts.getTime() % 1000;
-            if (millis < 0) millis += 1000;
+            long millis = ts.getNanos() / 1_000_000;
             raw = String.format("%s.%03d",
                     ts.toLocalDateTime().withNano(0)
                       .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
