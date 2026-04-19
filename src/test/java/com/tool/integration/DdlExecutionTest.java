@@ -710,4 +710,26 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE26: DATETIME2(scale=0) + GETDATE() default.
+     * TypeMapper maps datetime2(scale=0) → DATETIME(6) (scale=0 falls through to default fsp=6).
+     * SchemaConverter: scale=0 is not >0, so default stays CURRENT_TIMESTAMP (no precision).
+     * Result: DATETIME(6) DEFAULT CURRENT_TIMESTAMP — TiDB should accept this.
+     */
+    @Test @Order(26)
+    void de26_datetime2Scale0WithGetdateDefault() throws Exception {
+        String tn = "de_dt2_scale0_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema ts = colDefaultScale("created_at", "datetime2", 0, false, "(getdate())");
+
+        TableSchema t = table(tn, List.of(id, ts), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATETIME2(scale=0) + GETDATE() should not produce a fatal error. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
