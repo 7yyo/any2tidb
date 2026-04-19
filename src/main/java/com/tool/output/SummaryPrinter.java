@@ -48,6 +48,7 @@ public class SummaryPrinter {
                 out.add(new IssueRow(dbName, r.fullTableName(), "MISMATCH", first, rest));
             } else if (r.hasKnownLoss()) {
                 List<String> loss = r.knownLossLines();
+                if (loss.isEmpty()) continue;
                 String first = loss.get(0);
                 List<String> rest = loss.size() > 1 ? loss.subList(1, loss.size()) : List.of();
                 out.add(new IssueRow(dbName, r.fullTableName(), "NOTE", first, rest));
