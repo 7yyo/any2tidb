@@ -1,5 +1,5 @@
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │  SQL Server → TiDB  Schema Migration Tool — 完整配置说明               │
+# │  any2tidb  — Any DB → TiDB Schema Migration Tool  完整配置说明         │
 # │                                                                         │
 # │  Usage（将 application.yml 与 jar 放同目录，直接运行）:                  │
 # │    java -jar any2tidb-1.0.0.jar                                        │
