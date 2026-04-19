@@ -3,6 +3,7 @@ package com.tool.pipeline.steps;
 import com.tool.config.AppConfig;
 import com.tool.logging.StructuredLogger;
 import com.tool.output.SummaryPrinter;
+import com.tool.common.model.ConversionResult;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
@@ -58,8 +59,8 @@ public class VerifyStep implements MigrationStep {
             List<String[]> succeededTables = db.convResults().entrySet().stream()
                     .filter(e -> {
                         var s = e.getValue().getStatus();
-                        return s == com.tool.common.model.ConversionResult.Status.OK
-                            || s == com.tool.common.model.ConversionResult.Status.WARN;
+                        return s == ConversionResult.Status.OK
+                            || s == ConversionResult.Status.WARN;
                     })
                     .map(e -> e.getKey().split("\\.", 2))  // "schema.table" → ["schema","table"]
                     .toList();

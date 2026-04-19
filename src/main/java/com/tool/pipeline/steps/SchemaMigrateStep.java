@@ -97,7 +97,11 @@ public class SchemaMigrateStep implements MigrationStep {
 
                 if (dr.stoppedEarly) {
                     progress.clear();
-                    System.out.println("[WARN ] Stopped early (continueOnError=false) — see ms2tidb.log");
+                    if (dr.convResults().isEmpty()) {
+                        System.out.println("[ERROR] Stopped early: table name conflict — see ms2tidb.log");
+                    } else {
+                        System.out.println("[WARN ] Stopped early (continueOnError=false) — see ms2tidb.log");
+                    }
                     stoppedEarlyGlobal = true;
                     break;
                 }
