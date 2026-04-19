@@ -732,4 +732,45 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE27: Numeric literal defaults — double-wrapped parens, negative, decimal.
+     * SQL Server stores: ((0)), ((-1)), ((1.500000))
+     * TypeMapper strips parens → 0, -1, 1.500000
+     * Verify TiDB accepts these as DEFAULT values.
+     */
+    @Test @Order(27)
+    void de27_numericLiteralDefaults() throws Exception {
+        String tn = "de_numeric_defaults";
+        drop(tn);
+        ColumnSchema id     = col("id", "int", false);
+        ColumnSchema flag   = colDefault("flag",   "bit",          false, "((0))");
+        ColumnSchema score  = colDefault("score",  "int",          true,  "((-1))");
+        ColumnSchema amount = colDefault("amount", "decimal",      true,  "((1.500000))");
+        amount.setPrecision(10); amount.setScale(6);
+        ColumnSchema big    = colDefault("big",    "bigint",       true,  "((0))");
+
+        TableSchema t = table(tn, List.of(id, flag, score, amount, big), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "Numeric literal defaults should all execute on TiDB. Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+
+        // Verify defaults are actually stored
+        try (Statement st = tidbConn.createStatement();
+             ResultSet rs = st.executeQuery(
+                 "SELECT COLUMN_NAME, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS " +
+                 "WHERE TABLE_SCHEMA = 'testdb' AND TABLE_NAME = '" + tn + "' " +
+                 "AND COLUMN_NAME IN ('flag','score') ORDER BY COLUMN_NAME")) {
+            int count = 0;
+            while (rs.next()) {
+                count++;
+                String colName = rs.getString("COLUMN_NAME");
+                String def = rs.getString("COLUMN_DEFAULT");
+                assertNotNull(def, colName + " must have a DEFAULT");
+            }
+            assertEquals(2, count, "flag and score must both appear in INFORMATION_SCHEMA");
+        }
+        drop(tn);
+    }
 }
