@@ -99,9 +99,9 @@ public class SchemaMigrateStep implements MigrationStep {
                 if (dr.stoppedEarly) {
                     progress.clear();
                     if (dr.conflictStop()) {
-                        System.out.println("[ERROR] Stopped early: table name conflict — see ms2tidb.log");
+                        System.out.println("[ERROR] Stopped early: table name conflict — see any2tidb.log");
                     } else {
-                        System.out.println("[WARN ] Stopped early (continueOnError=false) — see ms2tidb.log");
+                        System.out.println("[WARN ] Stopped early (continueOnError=false) — see any2tidb.log");
                     }
                     stoppedEarlyGlobal = true;
                     stoppedByConflict = dr.conflictStop();
@@ -145,7 +145,7 @@ public class SchemaMigrateStep implements MigrationStep {
                 .toList();
         if (!conflicts.isEmpty()) {
             progress.clear();
-            System.out.println("[ERROR] Table name conflict in [" + dbName + "] — see ms2tidb.log");
+            System.out.println("[ERROR] Table name conflict in [" + dbName + "] — see any2tidb.log");
             log.log("ERROR", "Table name conflict", "db", dbName);
             conflicts.forEach(line -> log.log("ERROR", "conflict", "tables", line));
             return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of());

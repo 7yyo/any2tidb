@@ -2,16 +2,16 @@
 # │  SQL Server → TiDB  Schema Migration Tool — 完整配置说明               │
 # │                                                                         │
 # │  Usage（将 application.yml 与 jar 放同目录，直接运行）:                  │
-# │    java -jar sqlserver-to-tidb-1.0.0.jar                               │
+# │    java -jar any2tidb-1.0.0.jar                                        │
 # │                                                                         │
 # │  Dry-run（只打印 DDL，不写入 TiDB）:                                    │
-# │    java -jar sqlserver-to-tidb-1.0.0.jar --dry-run                     │
+# │    java -jar any2tidb-1.0.0.jar --dry-run                              │
 # │                                                                         │
 # │  命令行临时指定表（覆盖 convert.tables 配置）:                           │
-# │    java -jar sqlserver-to-tidb-1.0.0.jar --tables=orders,customers     │
+# │    java -jar any2tidb-1.0.0.jar --tables=orders,customers              │
 # │                                                                         │
 # │  配置文件不在当前目录时:                                                  │
-# │    java -jar sqlserver-to-tidb-1.0.0.jar \                             │
+# │    java -jar any2tidb-1.0.0.jar \                                      │
 # │         --spring.config.location=/path/to/application.yml              │
 # └─────────────────────────────────────────────────────────────────────────┘
 

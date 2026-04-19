@@ -45,7 +45,7 @@ public class App implements ApplicationRunner {
 
     private void printBanner(boolean dryRun, List<String> tablesOverride) {
         System.out.println("┌─────────────────────────────────────────┐");
-        System.out.println("│  ms2tidb  SQL Server → TiDB Migration   │");
+        System.out.println("│  any2tidb  Any DB → TiDB Migration      │");
         System.out.println("├──────────┬──────────────────────────────┤");
         System.out.printf( "│  source  │  %-28s│%n",
                 config.getSource().getHost() + ":" + config.getSource().getPort());
@@ -83,8 +83,8 @@ public class App implements ApplicationRunner {
         // Banner
         printBanner(dryRun, tablesOverride);
 
-        try (StructuredLogger log = StructuredLogger.open("ms2tidb.log")) {
-            log.log("INFO", "ms2tidb started");
+        try (StructuredLogger log = StructuredLogger.open("any2tidb.log")) {
+            log.log("INFO", "any2tidb started");
 
             ProgressReporter progress = new ProgressReporter();
             SummaryPrinter printer    = new SummaryPrinter();
@@ -100,7 +100,7 @@ public class App implements ApplicationRunner {
             );
 
             StepResult result = new MigrationPipeline(steps).run(ctx);
-            log.log("INFO", "ms2tidb finished", "fatal", result.isFatal());
+            log.log("INFO", "any2tidb finished", "fatal", result.isFatal());
 
             Integer totalFailed = ctx.get("totalFailed", Integer.class);
             if (totalFailed != null && totalFailed > 0) System.exit(1);
