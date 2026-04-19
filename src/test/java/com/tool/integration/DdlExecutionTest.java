@@ -830,4 +830,46 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    @Test @Order(30)
+    void de30_numericEmptyStringDefault_dropsDefault_tableCreated() throws Exception {
+        // Regression: numeric columns with SQL Server DEFAULT ('') must have their default
+        // dropped (not passed through) so TiDB does not reject with [1067].
+        String tn = "de_numeric_emptystr";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        id.setIdentity(true);
+        ColumnSchema actionOrder = col("actionOrder", "numeric", true);
+        actionOrder.setDefaultValue("('')");
+        ColumnSchema tmplVer = col("templateVersion", "int", true);
+        tmplVer.setDefaultValue("('')");
+        TableSchema t = table(tn, List.of(id, actionOrder, tmplVer), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "Numeric columns with empty-string default must not cause [1067]. Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn), "Table must be created: " + tn);
+        // Warn that defaults were dropped
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("actionOrder") && w.contains("default dropped")));
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("templateVersion") && w.contains("default dropped")));
+        drop(tn);
+    }
+
+    @Test @Order(31)
+    void de31_tinyintEmptyStringDefault_dropsDefault_tableCreated() throws Exception {
+        // Regression: TINYINT UNSIGNED (mapped from SS tinyint) with empty-string default
+        // must also be dropped — the UNSIGNED qualifier previously broke isNumericTidbType.
+        String tn = "de_tinyint_emptystr";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        id.setIdentity(true);
+        ColumnSchema flag = col("flag", "tinyint", true);
+        flag.setDefaultValue("('')");
+        TableSchema t = table(tn, List.of(id, flag), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "TINYINT with empty-string default must not cause [1067]. Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn), "Table must be created: " + tn);
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("flag") && w.contains("default dropped")));
+        drop(tn);
+    }
 }
