@@ -6,6 +6,8 @@ package com.tool.output;
  */
 public class ProgressReporter {
 
+    private static final int BAR_WIDTH = 20;
+
     private int lastProgressLen = 0;
     private int dbNameWidth = 0;
 
@@ -19,13 +21,11 @@ public class ProgressReporter {
      * @param dbName    database being converted
      * @param done      tables completed so far
      * @param total     total tables in this database
-     * @param skipCount number of skipped tables (unused in bar, reserved for future)
      * @param current   name of the table currently being processed
      */
-    public void print(String dbName, int done, int total, int skipCount, String current) {
-        int barWidth = 20;
-        int filled = (total == 0) ? barWidth : (int) Math.round((double) done / total * barWidth);
-        String bar = "━".repeat(filled) + "─".repeat(barWidth - filled);
+    public void print(String dbName, int done, int total, String current) {
+        int filled = (total == 0) ? BAR_WIDTH : (int) Math.round((double) done / total * BAR_WIDTH);
+        String bar = "━".repeat(filled) + "─".repeat(BAR_WIDTH - filled);
         String line = String.format(" %-" + dbNameWidth + "s  [%s]  %d/%d  %s",
                 dbName, bar, done, total, current);
         if (line.length() < lastProgressLen) {
