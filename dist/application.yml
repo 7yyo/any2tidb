@@ -57,3 +57,22 @@ convert:
 
   # 遇到某张表失败时是否继续迁移剩余表（false = 遇到第一个错误就停止）
   continueOnError: true
+
+dump:
+  # 输出目录，默认当前目录（空字符串 = 当前目录）
+  outputDir: ""
+
+  # 每个 CSV 文件的最大大小（MB）；0 = 不切分
+  fileSizeMb: 256
+
+  # JDBC 服务端游标每批拉取的行数，影响内存占用（每批约 fileSizeMb/行大小）
+  chunkSize: 10000
+
+  # 是否同时生成与 CSV 配套的 CREATE TABLE .sql 文件（供 TiDB Lightning 使用）
+  generateSchema: true
+
+  # SELECT 时是否加 WITH (NOLOCK)，减少对生产库的锁竞争（允许脏读）
+  nolock: true
+
+  # 并发导出的表数量（每张表一个独立线程 + 连接）
+  concurrency: 4
