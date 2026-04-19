@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -154,21 +155,16 @@ class DumpStepTest {
         Statement alterSt = mock(Statement.class);
         when(masterConn.createStatement()).thenReturn(alterSt);
 
-        // For readStartLsn call on master
+        // DB connection: SET TRANSACTION ISOLATION LEVEL, then readStartLsn
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
         Statement lsnSt = mock(Statement.class);
         ResultSet lsnRs = mock(ResultSet.class);
         when(lsnRs.next()).thenReturn(false);
         when(lsnSt.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(lsnRs);
-
-        // We need masterConn.createStatement() to serve both readStartLsn and ALTER calls
-        // Use a counter approach via consecutive stubbing
-        when(masterConn.createStatement())
-                .thenReturn(lsnSt)   // first call: readStartLsn
-                .thenReturn(alterSt); // second call: ALTER DATABASE
-
-        Connection dbConn = mock(Connection.class);
-        Statement isoSt = mock(Statement.class);
-        when(dbConn.createStatement()).thenReturn(isoSt);
+        when(dbConn.createStatement())
+                .thenReturn(isoSt)   // first call: SET TRANSACTION ISOLATION LEVEL SNAPSHOT
+                .thenReturn(lsnSt);  // second call: readStartLsn
 
         when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
         when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
@@ -196,15 +192,15 @@ class DumpStepTest {
         when(checkRs.next()).thenReturn(true);
         when(checkRs.getString(1)).thenReturn("ON");
 
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
         Statement lsnSt = mock(Statement.class);
         ResultSet lsnRs = mock(ResultSet.class);
         when(lsnRs.next()).thenReturn(false);
         when(lsnSt.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(lsnRs);
-        when(masterConn.createStatement()).thenReturn(lsnSt);
-
-        Connection dbConn = mock(Connection.class);
-        Statement isoSt = mock(Statement.class);
-        when(dbConn.createStatement()).thenReturn(isoSt);
+        when(dbConn.createStatement())
+                .thenReturn(isoSt)
+                .thenReturn(lsnSt);
 
         when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
         when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
@@ -214,7 +210,7 @@ class DumpStepTest {
         step.executeWithConnections(ctx, dbName -> "master".equals(dbName) ? masterConn : dbConn);
 
         // ALTER DATABASE must NOT have been called (already ON)
-        verify(lsnSt, never()).execute(contains("ALTER DATABASE"));
+        verify(masterConn, never()).createStatement();
     }
 
     @Test
@@ -229,15 +225,15 @@ class DumpStepTest {
         when(checkRs.next()).thenReturn(true).thenReturn(false);
         when(checkRs.getString(1)).thenReturn("ON");
 
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
         Statement lsnSt = mock(Statement.class);
         ResultSet lsnRs = mock(ResultSet.class);
         when(lsnRs.next()).thenReturn(false);
         when(lsnSt.executeQuery(any())).thenReturn(lsnRs);
-        when(masterConn.createStatement()).thenReturn(lsnSt);
-
-        Connection dbConn = mock(Connection.class);
-        Statement isoSt = mock(Statement.class);
-        when(dbConn.createStatement()).thenReturn(isoSt);
+        when(dbConn.createStatement())
+                .thenReturn(isoSt)
+                .thenReturn(lsnSt);
 
         when(schemaExtractor.listDatabases(any())).thenReturn(List.of("testdb"));
         when(schemaExtractor.listTables(any(), any(), any()))
@@ -261,13 +257,14 @@ class DumpStepTest {
                 () -> dumpWriter, log);
 
         Path outDir = tmp.resolve("meta-test");
-        step.writeDumpMeta(outDir, "0xABCD", "2026-04-19T00:00:00Z",
-                List.of("db1", "db2"), true);
+        step.writeDumpMeta(outDir, Map.of("db1", "0xABCD", "db2", "0x1234"),
+                "2026-04-19T00:00:00Z", List.of("db1", "db2"), true);
 
         Path metaFile = outDir.resolve("dump-meta.json");
         assertTrue(Files.exists(metaFile), "dump-meta.json should be created");
         String content = Files.readString(metaFile);
-        assertTrue(content.contains("\"startLsn\": \"0xABCD\""));
+        assertTrue(content.contains("\"startLsnByDb\""));
+        assertTrue(content.contains("\"0xABCD\""));
         assertTrue(content.contains("\"startTime\": \"2026-04-19T00:00:00Z\""));
         assertTrue(content.contains("\"db1\""));
         assertTrue(content.contains("\"db2\""));
@@ -280,10 +277,12 @@ class DumpStepTest {
                 () -> dumpWriter, log);
 
         Path outDir = tmp.resolve("meta-null");
-        step.writeDumpMeta(outDir, null, "2026-04-19T00:00:00Z", List.of("db1"), false);
+        Map<String, String> lsnByDb = new java.util.LinkedHashMap<>();
+        lsnByDb.put("db1", null);
+        step.writeDumpMeta(outDir, lsnByDb, "2026-04-19T00:00:00Z", List.of("db1"), false);
 
         String content = Files.readString(outDir.resolve("dump-meta.json"));
-        assertTrue(content.contains("\"startLsn\": null"));
+        assertTrue(content.contains("\"db1\": null"));
         assertTrue(content.contains("\"snapshotIsolation\": false"));
     }
 
@@ -302,5 +301,78 @@ class DumpStepTest {
         boolean found = Files.walk(tmp)
                 .anyMatch(p -> p.getFileName().toString().equals("dump-meta.json"));
         assertTrue(found, "dump-meta.json should be written after execution");
+    }
+
+    @Test
+    void writeDumpMeta_writtenEvenOnException() throws Exception {
+        config.getDump().setSnapshotIsolation(false);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("mydb"));
+        when(schemaExtractor.listTables(any(), any(), any()))
+                .thenThrow(new RuntimeException("simulated export failure"));
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+
+        assertThrows(Exception.class,
+                () -> step.executeWithConnections(ctx, dbName -> mock(Connection.class)));
+
+        boolean found = Files.walk(tmp)
+                .anyMatch(p -> p.getFileName().toString().equals("dump-meta.json"));
+        assertTrue(found, "dump-meta.json should be written even when the loop throws");
+    }
+
+    @Test
+    void snapshotIsolationTrue_lsnRecordedPerDb() throws Exception {
+        config.getDump().setSnapshotIsolation(true);
+
+        // Master connection: snapshot already ON, no ALTER needed
+        Connection masterConn = mock(Connection.class);
+        PreparedStatement checkPs = mock(PreparedStatement.class);
+        ResultSet checkRs = mock(ResultSet.class);
+        when(masterConn.prepareStatement(contains("snapshot_isolation_state_desc")))
+                .thenReturn(checkPs);
+        when(checkPs.executeQuery()).thenReturn(checkRs);
+        when(checkRs.next()).thenReturn(true);
+        when(checkRs.getString(1)).thenReturn("ON");
+
+        // DB-scoped connection: readStartLsn returns a value
+        Connection dbConn = mock(Connection.class);
+        Statement isoSt = mock(Statement.class);
+        Statement lsnSt = mock(Statement.class);
+        ResultSet lsnRs = mock(ResultSet.class);
+        byte[] lsnBytes = new byte[]{0x00, 0x00, 0x00, 0x2A};
+        when(lsnRs.next()).thenReturn(true);
+        when(lsnRs.getBytes(1)).thenReturn(lsnBytes);
+        when(lsnSt.executeQuery(contains("fn_cdc_get_max_lsn"))).thenReturn(lsnRs);
+        // createStatement: first call for SET TRANSACTION ISOLATION LEVEL, second for readStartLsn
+        when(dbConn.createStatement())
+                .thenReturn(isoSt)
+                .thenReturn(lsnSt);
+
+        when(schemaExtractor.listDatabases(any())).thenReturn(List.of("mydb"));
+        when(schemaExtractor.listTables(any(), any(), any())).thenReturn(List.of());
+
+        DumpStep step = new DumpStep(config, schemaExtractor, dumpExtractor,
+                () -> dumpWriter, log);
+        step.executeWithConnections(ctx, dbName -> "master".equals(dbName) ? masterConn : dbConn);
+
+        // readStartLsn must have been called on dbConn (not masterConn)
+        verify(lsnSt).executeQuery(contains("fn_cdc_get_max_lsn"));
+        // masterConn should NOT have had fn_cdc_get_max_lsn called on it
+        verify(masterConn, never()).createStatement();
+
+        // dump-meta.json should contain startLsnByDb with mydb key
+        boolean found = Files.walk(tmp)
+                .filter(p -> p.getFileName().toString().equals("dump-meta.json"))
+                .findFirst()
+                .map(p -> {
+                    try {
+                        String c = Files.readString(p);
+                        return c.contains("\"startLsnByDb\"") && c.contains("\"mydb\"");
+                    } catch (Exception e) { return false; }
+                })
+                .orElse(false);
+        assertTrue(found, "dump-meta.json should contain startLsnByDb with mydb entry");
     }
 }

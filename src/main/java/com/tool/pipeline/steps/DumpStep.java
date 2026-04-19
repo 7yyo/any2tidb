@@ -105,70 +105,67 @@ public class DumpStep implements MigrationStep {
 
         boolean useSnapshot = dc.isSnapshotIsolation();
         String startTime = java.time.Instant.now().toString();
-        String startLsn = null;
-
-        if (useSnapshot) {
-            try (Connection masterConn2 = connFactory.apply("master")) {
-                startLsn = readStartLsn(masterConn2);
-            }
-        }
+        Map<String, String> startLsnByDb = new LinkedHashMap<>();
 
         List<DumpTableResult> allResults = new ArrayList<>();
         long totalRows = 0L;
         int  concurrency = Math.max(1, dc.getConcurrency());
 
-        for (String dbName : dbNames) {
-            if (useSnapshot) {
-                try (Connection masterConn = connFactory.apply("master")) {
-                    ensureSnapshotIsolation(masterConn, dbName);
-                }
-            }
-
-            Connection dbConn = connFactory.apply(dbName);
-            try {
+        try {
+            for (String dbName : dbNames) {
                 if (useSnapshot) {
-                    setSnapshotIsolationLevel(dbConn);
-                }
-
-                List<String[]> tableList = schemaExtractor.listTables(dbConn, schemas, tables);
-                log.log("INFO", "Dumping database", "db", dbName, "tables", tableList.size());
-
-                boolean useNolock = !useSnapshot && dc.isNolock();
-
-                ExecutorService pool = Executors.newFixedThreadPool(concurrency);
-                List<Future<DumpTableResult>> futures = new ArrayList<>();
-
-                for (String[] entry : tableList) {
-                    String schema = entry[0];
-                    String table  = entry[1];
-                    futures.add(pool.submit(() ->
-                            dumpOneTable(connFactory, dbName, schema, table, dc,
-                                    outputRoot, useSnapshot, useNolock)));
-                }
-
-                pool.shutdown();
-                pool.awaitTermination(24, TimeUnit.HOURS);
-
-                for (Future<DumpTableResult> f : futures) {
-                    DumpTableResult r = f.get();
-                    allResults.add(r);
-                    totalRows += r.rows();
-                    if (r.isError()) {
-                        log.log("ERROR", "Table dump failed",
-                                "table", r.schema() + "." + r.table(), "error", r.error());
-                    } else {
-                        log.log("INFO", "Table dump complete",
-                                "table", r.schema() + "." + r.table(),
-                                "rows", r.rows(), "files", r.files(),
-                                "ms", r.elapsedMs());
+                    try (Connection masterConn = connFactory.apply("master")) {
+                        ensureSnapshotIsolation(masterConn, dbName);
                     }
                 }
-            } finally {
-                try { dbConn.close(); } catch (Exception ignored) {}
-            }
-        }
 
-        writeDumpMeta(outputRoot, startLsn, startTime, dbNames, useSnapshot);
+                Connection dbConn = connFactory.apply(dbName);
+                try {
+                    if (useSnapshot) {
+                        setSnapshotIsolationLevel(dbConn);
+                        startLsnByDb.put(dbName, readStartLsn(dbConn));
+                    }
+
+                    List<String[]> tableList = schemaExtractor.listTables(dbConn, schemas, tables);
+                    log.log("INFO", "Dumping database", "db", dbName, "tables", tableList.size());
+
+                    boolean useNolock = !useSnapshot && dc.isNolock();
+
+                    ExecutorService pool = Executors.newFixedThreadPool(concurrency);
+                    List<Future<DumpTableResult>> futures = new ArrayList<>();
+
+                    for (String[] entry : tableList) {
+                        String schema = entry[0];
+                        String table  = entry[1];
+                        futures.add(pool.submit(() ->
+                                dumpOneTable(connFactory, dbName, schema, table, dc,
+                                        outputRoot, useSnapshot, useNolock)));
+                    }
+
+                    pool.shutdown();
+                    pool.awaitTermination(24, TimeUnit.HOURS);
+
+                    for (Future<DumpTableResult> f : futures) {
+                        DumpTableResult r = f.get();
+                        allResults.add(r);
+                        totalRows += r.rows();
+                        if (r.isError()) {
+                            log.log("ERROR", "Table dump failed",
+                                    "table", r.schema() + "." + r.table(), "error", r.error());
+                        } else {
+                            log.log("INFO", "Table dump complete",
+                                    "table", r.schema() + "." + r.table(),
+                                    "rows", r.rows(), "files", r.files(),
+                                    "ms", r.elapsedMs());
+                        }
+                    }
+                } finally {
+                    try { dbConn.close(); } catch (Exception ignored) {}
+                }
+            }
+        } finally {
+            writeDumpMeta(outputRoot, startLsnByDb, startTime, dbNames, useSnapshot);
+        }
 
         ctx.put("dumpSummaries", allResults);
         ctx.put("dumpTotalRows", totalRows);
@@ -256,15 +253,20 @@ public class DumpStep implements MigrationStep {
         return null;
     }
 
-    void writeDumpMeta(Path outputRoot, String startLsn, String startTime,
+    void writeDumpMeta(Path outputRoot, Map<String, String> startLsnByDb, String startTime,
                        List<String> databases, boolean snapshotIsolation) {
         try {
             java.nio.file.Files.createDirectories(outputRoot);
             Path metaFile = outputRoot.resolve("dump-meta.json");
-            String lsnValue = startLsn != null ? "\"" + startLsn + "\"" : "null";
+            StringBuilder lsnEntries = new StringBuilder();
+            for (Map.Entry<String, String> e : startLsnByDb.entrySet()) {
+                if (lsnEntries.length() > 0) lsnEntries.append(",\n");
+                String val = e.getValue() != null ? "\"" + e.getValue() + "\"" : "null";
+                lsnEntries.append("    \"").append(e.getKey()).append("\": ").append(val);
+            }
             String json = "{\n" +
                 "  \"startTime\": \"" + startTime + "\",\n" +
-                "  \"startLsn\": " + lsnValue + ",\n" +
+                "  \"startLsnByDb\": {\n" + lsnEntries + "\n  },\n" +
                 "  \"databases\": [" + databases.stream()
                     .map(d -> "\"" + d + "\"")
                     .collect(java.util.stream.Collectors.joining(", ")) + "],\n" +
