@@ -668,4 +668,26 @@ class DdlExecutionTest {
         assertTrue(tableExists(tn));
         drop(tn);
     }
+
+    /**
+     * DE24: DATETIME + SYSDATETIME() default.
+     * TypeMapper maps SYSDATETIME() → CURRENT_TIMESTAMP(6).
+     * DATETIME column (no precision) with DEFAULT CURRENT_TIMESTAMP(6):
+     * TiDB may reject precision mismatch (DATETIME vs CURRENT_TIMESTAMP(6)).
+     */
+    @Test @Order(24)
+    void de24_datetimeWithSysdatetimeDefault() throws Exception {
+        String tn = "de_sysdatetime";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema ts = colDefault("logged_at", "datetime", false, "(SYSDATETIME())");
+
+        TableSchema t = table(tn, List.of(id, ts), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATETIME + SYSDATETIME() should not produce a fatal DDL error. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
