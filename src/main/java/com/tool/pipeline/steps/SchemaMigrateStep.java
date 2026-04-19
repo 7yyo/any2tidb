@@ -76,6 +76,7 @@ public class SchemaMigrateStep implements MigrationStep {
 
         int totalFailed = 0;
         boolean stoppedEarlyGlobal = false;
+        boolean stoppedByConflict = false;
         List<SummaryPrinter.DbSummary> summaries = new ArrayList<>();
 
         for (String dbName : dbNames) {
@@ -97,12 +98,13 @@ public class SchemaMigrateStep implements MigrationStep {
 
                 if (dr.stoppedEarly) {
                     progress.clear();
-                    if (dr.convResults().isEmpty()) {
+                    if (dr.conflictStop()) {
                         System.out.println("[ERROR] Stopped early: table name conflict — see ms2tidb.log");
                     } else {
                         System.out.println("[WARN ] Stopped early (continueOnError=false) — see ms2tidb.log");
                     }
                     stoppedEarlyGlobal = true;
+                    stoppedByConflict = dr.conflictStop();
                     break;
                 }
             }
@@ -112,14 +114,15 @@ public class SchemaMigrateStep implements MigrationStep {
         ctx.put("totalFailed", totalFailed);
 
         return stoppedEarlyGlobal
-                ? StepResult.fatal("stopped early: continueOnError=false")
+                ? StepResult.fatal(stoppedByConflict ? "stopped early: table name conflict"
+                                                     : "stopped early: continueOnError=false")
                 : StepResult.ok("schema migration complete, failed=" + totalFailed);
     }
 
     // ── Internal result carrier ───────────────────────────────────────────────
 
     private record DbResult(
-            int failed, int warned, int skipped, boolean stoppedEarly,
+            int failed, int warned, int skipped, boolean stoppedEarly, boolean conflictStop,
             List<String[]> allTables, List<String[]> succeededTables,
             Map<String, ConversionResult> convResults) {}
 
@@ -145,7 +148,7 @@ public class SchemaMigrateStep implements MigrationStep {
             System.out.println("[ERROR] Table name conflict in [" + dbName + "] — see ms2tidb.log");
             log.log("ERROR", "Table name conflict", "db", dbName);
             conflicts.forEach(line -> log.log("ERROR", "conflict", "tables", line));
-            return new DbResult(1, 0, 0, true, tableList, List.of(), Map.of());
+            return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of());
         }
 
         int total = tableList.size();
@@ -189,7 +192,7 @@ public class SchemaMigrateStep implements MigrationStep {
         progress.print(dbName, total, total, "");
         System.out.println();
 
-        return new DbResult(failed, warned, skipped, stopEarly,
+        return new DbResult(failed, warned, skipped, stopEarly, false,
                 tableList, succeededTables, convResults);
     }
 
