@@ -101,6 +101,7 @@ class SqlServerDumpExtractorTest {
 
         assertEquals(1, batches.size());
         assertEquals(3, batches.get(0).rows().size());
+        assertEquals(0, batches.get(0).batchIndex());
     }
 
     @Test
@@ -138,15 +139,26 @@ class SqlServerDumpExtractorTest {
 
     @Test
     void estimateRowCount_returnsStatisticsValue() throws Exception {
-        Statement st = mock(Statement.class);
+        PreparedStatement cntPs = mock(PreparedStatement.class);
         ResultSet cntRs = mock(ResultSet.class);
-        when(conn.createStatement()).thenReturn(st);
-        when(st.executeQuery(anyString())).thenReturn(cntRs);
+        when(conn.prepareStatement(anyString())).thenReturn(cntPs);
+        when(cntPs.executeQuery()).thenReturn(cntRs);
         when(cntRs.next()).thenReturn(true);
         when(cntRs.getLong(1)).thenReturn(42_000L);
 
         long count = extractor.estimateRowCount(conn, "dbo", "orders");
 
         assertEquals(42_000L, count);
+    }
+
+    @Test
+    void getColumnNames_returnsColumnsFromMetadata() throws Exception {
+        when(meta.getColumnCount()).thenReturn(2);
+        when(meta.getColumnName(1)).thenReturn("id");
+        when(meta.getColumnName(2)).thenReturn("name");
+
+        List<String> cols = extractor.getColumnNames(conn, "dbo", "users");
+
+        assertEquals(List.of("id", "name"), cols);
     }
 }

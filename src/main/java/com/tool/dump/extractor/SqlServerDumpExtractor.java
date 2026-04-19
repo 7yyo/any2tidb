@@ -80,11 +80,14 @@ public class SqlServerDumpExtractor implements DumpExtractor {
             "FROM sys.tables t " +
             "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
             "JOIN sys.partitions p ON t.object_id = p.object_id " +
-            "WHERE s.name = '" + schema + "' AND t.name = '" + table + "' " +
+            "WHERE s.name = ? AND t.name = ? " +
             "  AND p.index_id IN (0, 1)"; // heap or clustered index
-        try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
-            return rs.next() ? rs.getLong(1) : 0L;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, schema);
+            ps.setString(2, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
         }
     }
 }
