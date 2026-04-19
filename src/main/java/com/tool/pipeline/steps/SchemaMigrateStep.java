@@ -19,8 +19,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -61,14 +59,12 @@ public class SchemaMigrateStep implements MigrationStep {
     @Override
     public String name() { return "SchemaMigrate"; }
 
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
-
     /** Collects all DDL for one database and writes it to a .sql file. Returns the file path. */
     private Path writeDryRunFile(String dbName, String ddlBlock) throws IOException {
-        String filename = "any2tidb-" + dbName + "-" + LocalDateTime.now().format(TS) + ".sql";
+        String filename = "any2tidb-" + dbName + ".sql";
         Path out = Path.of(filename);
         try (PrintWriter pw = new PrintWriter(out.toFile(), StandardCharsets.UTF_8)) {
-            pw.println("-- any2tidb dry-run  db=" + dbName + "  " + LocalDateTime.now());
+            pw.println("-- any2tidb dry-run  db=" + dbName);
             pw.println("-- Source to TiDB directly: mysql -h host -P 4000 -u root < " + filename);
             pw.println();
             pw.println("USE `" + dbName + "`;");
