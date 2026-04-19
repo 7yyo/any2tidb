@@ -286,7 +286,7 @@ class SchemaConverterTest {
     }
 
     @Test
-    void timeColumn_getdateDefault_emitsCurtime() {
+    void timeColumn_getdateDefault_dropsDefault() {
         TableSchema t = twoColTable("t", "time", "(getdate())");
         ConversionResult r = new ConversionResult("dbo.tbl");
         String ddl = converter.toCreateTableDDL(t, r, false);

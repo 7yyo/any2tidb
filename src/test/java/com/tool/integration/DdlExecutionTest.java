@@ -10,6 +10,7 @@ import com.tool.writer.TiDBWriter;
 import org.junit.jupiter.api.*;
 
 import java.sql.*;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -714,8 +715,9 @@ class DdlExecutionTest {
     /**
      * DE26: DATETIME2(scale=0) + GETDATE() default.
      * TypeMapper maps datetime2(scale=0) → DATETIME(6) (scale=0 falls through to default fsp=6).
-     * SchemaConverter: scale=0 is not >0, so default stays CURRENT_TIMESTAMP (no precision).
-     * Result: DATETIME(6) DEFAULT CURRENT_TIMESTAMP — TiDB should accept this.
+     * SchemaConverter derives precision from the mapped TiDB type string "DATETIME(6)",
+     * so it emits DEFAULT CURRENT_TIMESTAMP(6) — matching the column precision exactly.
+     * Result: DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6) — TiDB accepts this without Error 1067.
      */
     @Test @Order(26)
     void de26_datetime2Scale0WithGetdateDefault() throws Exception {
@@ -815,7 +817,7 @@ class DdlExecutionTest {
         String tn = "de_dt_matrix";
         drop(tn);
         ColumnSchema id = col("id", "int", false);
-        java.util.List<ColumnSchema> cols = new java.util.ArrayList<>();
+        List<ColumnSchema> cols = new ArrayList<>();
         cols.add(id);
         for (int scale = 1; scale <= 6; scale++) {
             cols.add(colDefaultScale("dt" + scale, "datetime2", scale, false, "(getdate())"));

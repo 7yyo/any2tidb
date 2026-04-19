@@ -70,7 +70,7 @@ public class SchemaConverter {
             String defaultVal = typeMapper.mapDefaultValue(rawDefault);
             // Derive the precision of DATETIME columns from the mapped TiDB type (e.g. DATETIME(6) → 6)
             // so that CURRENT_TIMESTAMP and UTC_TIMESTAMP fallbacks always match the column precision.
-            String tidbType = mapped.tidbType().toUpperCase();
+            String tidbType = mapped.tidbType().trim().toUpperCase();
             int datetimePrecision = 0;
             if (tidbType.startsWith("DATETIME(") && tidbType.endsWith(")")) {
                 try {
