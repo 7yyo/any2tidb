@@ -2,6 +2,7 @@ package com.tool.pipeline;
 
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
+import java.util.ArrayList;
 import java.util.List;
 
 class MigrationPipelineTest {
@@ -48,7 +49,7 @@ class MigrationPipelineTest {
 
     @Test
     void pipeline_runsStepsInOrder() throws Exception {
-        List<String> log = new java.util.ArrayList<>();
+        List<String> log = new ArrayList<>();
         MigrationStep s1 = ctx -> { log.add("s1"); return StepResult.ok("step1 done"); };
         MigrationStep s2 = ctx -> { log.add("s2"); return StepResult.ok("step2 done"); };
 
@@ -59,7 +60,7 @@ class MigrationPipelineTest {
 
     @Test
     void pipeline_stopOnFatal() throws Exception {
-        List<String> log = new java.util.ArrayList<>();
+        List<String> log = new ArrayList<>();
         MigrationStep s1 = ctx -> { log.add("s1"); return StepResult.fatal("fatal!"); };
         MigrationStep s2 = ctx -> { log.add("s2"); return StepResult.ok("ok"); };
 
@@ -70,8 +71,7 @@ class MigrationPipelineTest {
 
     @Test
     void pipeline_emptySteps_runsOk() throws Exception {
-        // should not throw
-        assertDoesNotThrow(() ->
-            new MigrationPipeline(java.util.List.of()).run(new StepContext()));
+        StepResult result = new MigrationPipeline(List.of()).run(new StepContext());
+        assertFalse(result.isFatal());
     }
 }

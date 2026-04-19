@@ -22,7 +22,11 @@ public class MigrationPipeline {
     public StepResult run(StepContext ctx) throws Exception {
         StepResult last = StepResult.ok("no steps");
         for (MigrationStep step : steps) {
-            last = step.execute(ctx);
+            try {
+                last = step.execute(ctx);
+            } catch (Exception e) {
+                last = StepResult.fatal("[" + step.name() + "] " + e.getMessage());
+            }
             if (last.isFatal()) break;
         }
         return last;
