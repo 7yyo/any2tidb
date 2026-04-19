@@ -186,14 +186,14 @@ public class SchemaConverter {
 
         // Indexes (appended after CREATE TABLE)
         for (IndexSchema idx : table.getIndexes()) {
-            String indexDdl = buildIndexDDL(table.getTableName(), idx, result);
+            String indexDdl = buildIndexDDL(table.getTableName(), idx, result, table);
             if (indexDdl != null) sb.append("\n").append(indexDdl).append("\n");
         }
 
         return sb.toString();
     }
 
-    private String buildIndexDDL(String tableName, IndexSchema idx, ConversionResult result) {
+    private String buildIndexDDL(String tableName, IndexSchema idx, ConversionResult result, TableSchema table) {
         if (idx.isFulltext()) {
             result.addWarning("FULLTEXT index '" + idx.getName() + "' discarded — not supported in TiDB");
             return null;
@@ -214,9 +214,79 @@ public class SchemaConverter {
             result.addWarning("index '" + idx.getName() + "': WHERE filter dropped — filtered indexes not supported in TiDB");
         }
 
+        // Key-length guard: TiDB/InnoDB limit is 3072 bytes for utf8mb4 (4 bytes/char)
+        if (table != null) {
+            int estimatedKeyBytes = estimateIndexKeyBytes(idx, table);
+            if (estimatedKeyBytes > 3072) {
+                result.addWarning("index '" + idx.getName() + "': estimated key size " + estimatedKeyBytes
+                        + " bytes exceeds TiDB 3072-byte limit — index dropped to prevent Error 1071. "
+                        + "Consider reducing column lengths or splitting the index.");
+                return null;
+            }
+        }
+
         String uniqueKeyword = idx.isUnique() ? "UNIQUE " : "";
         return "CREATE " + uniqueKeyword + "INDEX `" + idx.getName() + "` ON `" + tableName + "` ("
                 + quoteCols(idx.getColumns()) + ");";
+    }
+
+    /**
+     * Estimates the total index key size in bytes using utf8mb4 worst-case (4 bytes/char).
+     * Only counts the key columns (not INCLUDE columns, which are dropped during migration).
+     */
+    private int estimateIndexKeyBytes(IndexSchema idx, TableSchema table) {
+        // Build a lookup map: column name (lower) → ColumnSchema
+        java.util.Map<String, ColumnSchema> colMap = new java.util.HashMap<>();
+        for (ColumnSchema col : table.getColumns()) {
+            colMap.put(col.getName().toLowerCase(), col);
+        }
+        int total = 0;
+        for (String colName : idx.getColumns()) {
+            ColumnSchema col = colMap.get(colName.trim().toLowerCase());
+            if (col == null) continue;
+            TypeMapper.MappedType mapped = typeMapper.mapType(col);
+            total += estimateColumnKeyBytes(col, mapped.tidbType());
+        }
+        return total;
+    }
+
+    /**
+     * Estimates the key storage for a single column in bytes.
+     * Uses utf8mb4 worst-case: 4 bytes per character for variable-length string types.
+     */
+    private static int estimateColumnKeyBytes(ColumnSchema col, String tidbType) {
+        // Normalize: strip CHARACTER SET clause before parsing
+        String normalized = tidbType.trim().replaceAll("(?i)\\s+CHARACTER\\s+SET\\s+\\S+", "");
+        String base = normalized.replaceAll("(?i)\\(.*\\)", "").trim().toUpperCase();
+        // Variable-length string types: stored as actual length × 4 bytes for utf8mb4
+        if (base.equals("VARCHAR") || base.equals("CHAR") || base.equals("VARBINARY") || base.equals("BINARY")) {
+            // Extract the declared length from the tidb type, e.g. VARCHAR(200) → 200
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\((\\d+)\\)").matcher(normalized);
+            if (m.find()) {
+                int charLen = Integer.parseInt(m.group(1));
+                // utf8mb4: up to 4 bytes/char for VARCHAR; VARBINARY/BINARY: 1 byte/char
+                boolean isBinary = base.equals("VARBINARY") || base.equals("BINARY");
+                return charLen * (isBinary ? 1 : 4);
+            }
+            // Fallback: use SQL Server maxLength if available
+            int ml = col.getMaxLength();
+            return (ml > 0 ? ml : 255) * 4;
+        }
+        // Fixed-size types
+        return switch (base) {
+            case "INT"       -> 4;
+            case "BIGINT"    -> 8;
+            case "SMALLINT"  -> 2;
+            case "TINYINT"   -> 1;
+            case "FLOAT"     -> 4;
+            case "DOUBLE", "REAL" -> 8;
+            case "DECIMAL", "NUMERIC" -> 9; // approximate; 4-byte minimum
+            case "DATE"      -> 3;
+            case "TIME"      -> 3;
+            case "DATETIME"  -> 8;
+            case "TIMESTAMP" -> 4;
+            default          -> 8; // conservative fallback
+        };
     }
 
     private String quoteCols(List<String> cols) {

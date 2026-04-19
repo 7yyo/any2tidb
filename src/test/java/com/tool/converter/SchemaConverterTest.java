@@ -525,4 +525,97 @@ class SchemaConverterTest {
                     c[1] + " empty-string default must NOT produce 'default dropped' warning: " + r.getWarnings());
         }
     }
+
+    // ── Index key-length guard (Error 1071) tests ─────────────────────────────
+
+    /** Build a table whose index columns are all nvarchar with the given maxLength. */
+    private TableSchema wideIndexTable(String idxName, int numCols, int nvarcharLen) {
+        TableSchema t = new TableSchema();
+        t.setSchemaName("dbo"); t.setTableName("wide_tbl");
+        ColumnSchema id = new ColumnSchema();
+        id.setName("id"); id.setSqlServerType("int"); id.setNullable(false); id.setIdentity(true);
+        java.util.List<ColumnSchema> cols = new java.util.ArrayList<>();
+        cols.add(id);
+        java.util.List<String> idxCols = new java.util.ArrayList<>();
+        for (int i = 1; i <= numCols; i++) {
+            ColumnSchema c = new ColumnSchema();
+            c.setName("c" + i); c.setSqlServerType("nvarchar"); c.setMaxLength(nvarcharLen); c.setNullable(true);
+            cols.add(c);
+            idxCols.add("c" + i);
+        }
+        t.setColumns(cols);
+        t.setPrimaryKeyColumns(java.util.List.of("id"));
+        IndexSchema idx = new IndexSchema();
+        idx.setName(idxName); idx.setUnique(false); idx.setClustered(false);
+        idx.setColumns(idxCols); idx.setIncludeColumns(java.util.List.of());
+        t.setIndexes(java.util.List.of(idx));
+        return t;
+    }
+
+    @Test
+    void indexKeyTooLong_isDropped_withWarning() {
+        // 3 × nvarchar(800 bytes) → charLen=400 → 400×4=1600 bytes each → 4800 bytes > 3072 → drop + warn
+        TableSchema t = wideIndexTable("idx_wide", 3, 800);
+        ConversionResult result = new ConversionResult("dbo.wide_tbl");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("idx_wide"), "Over-limit index must be dropped from DDL: " + ddl);
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("idx_wide") && w.contains("1071")),
+                "Must warn about Error 1071: " + result.getWarnings());
+    }
+
+    @Test
+    void indexKeyUnderLimit_isRetained() {
+        // 2 × nvarchar(200 bytes) → charLen=100 → 100×4=400 bytes each → 800 bytes ≤ 3072 → keep index
+        TableSchema t = wideIndexTable("idx_ok", 2, 200);
+        ConversionResult result = new ConversionResult("dbo.wide_tbl");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("idx_ok"), "Within-limit index must be retained: " + ddl);
+        assertFalse(result.getWarnings().stream().anyMatch(w -> w.contains("1071")),
+                "Must not warn about Error 1071 for short index: " + result.getWarnings());
+    }
+
+    @Test
+    void indexKeyExactly3072_isRetained() {
+        // 3 × nvarchar(512 bytes) → charLen=256 → 256×4=1024 bytes each → 3072 bytes exactly at limit → keep
+        TableSchema t = wideIndexTable("idx_exact", 3, 512);
+        ConversionResult result = new ConversionResult("dbo.wide_tbl");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("idx_exact"), "Index at exactly 3072 bytes must be retained: " + ddl);
+    }
+
+    @Test
+    void indexOnIntColumns_isRetained_noBytesWarning() {
+        // 4 × int → 4 × 4 = 16 bytes, well under limit
+        TableSchema t = new TableSchema();
+        t.setSchemaName("dbo"); t.setTableName("int_tbl");
+        ColumnSchema id = new ColumnSchema();
+        id.setName("id"); id.setSqlServerType("int"); id.setNullable(false); id.setIdentity(true);
+        ColumnSchema a = new ColumnSchema(); a.setName("a"); a.setSqlServerType("int"); a.setNullable(true);
+        ColumnSchema b = new ColumnSchema(); b.setName("b"); b.setSqlServerType("int"); b.setNullable(true);
+        t.setColumns(java.util.List.of(id, a, b));
+        t.setPrimaryKeyColumns(java.util.List.of("id"));
+        IndexSchema idx = new IndexSchema();
+        idx.setName("idx_int"); idx.setUnique(false); idx.setClustered(false);
+        idx.setColumns(java.util.List.of("a", "b")); idx.setIncludeColumns(java.util.List.of());
+        t.setIndexes(java.util.List.of(idx));
+        ConversionResult result = new ConversionResult("dbo.int_tbl");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("idx_int"), "INT index must be retained: " + ddl);
+        assertFalse(result.getWarnings().stream().anyMatch(w -> w.contains("1071")));
+    }
+
+    @Test
+    void compositeIndex_oneColOverLimit_isDropped() {
+        // 1 × nvarchar(1600 bytes) → charLen=800 → 800×4=3200 bytes > 3072 → drop
+        TableSchema t = wideIndexTable("idx_onewide", 1, 1600);
+        ConversionResult result = new ConversionResult("dbo.wide_tbl");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("idx_onewide"), "Single-column over-limit index must be dropped: " + ddl);
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("idx_onewide") && w.contains("1071")));
+    }
 }

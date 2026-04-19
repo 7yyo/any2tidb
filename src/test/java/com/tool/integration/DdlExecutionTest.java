@@ -872,4 +872,33 @@ class DdlExecutionTest {
         assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("flag") && w.contains("default dropped")));
         drop(tn);
     }
+
+    @Test @Order(32)
+    void de32_wideNvarcharIndex_overLimit_droppedWithWarning() throws Exception {
+        // Regression: composite index on wide nvarchar columns must be dropped
+        // before TiDB rejects it with [1071] Specified key was too long.
+        // 3 × nvarchar(800 bytes) → charLen=400 → 400×4=1600 bytes each → 4800 > 3072
+        String tn = "de_wide_idx";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        id.setIdentity(true);
+        // Use colLen to set maxLength; nvarchar with maxLength=800 → charLen=400
+        ColumnSchema c1 = colLen("c1", "nvarchar", 800, true);
+        ColumnSchema c2 = colLen("c2", "nvarchar", 800, true);
+        ColumnSchema c3 = colLen("c3", "nvarchar", 800, true);
+        IndexSchema idx = new IndexSchema();
+        idx.setName("idx_wide_cols"); idx.setUnique(false); idx.setClustered(false);
+        idx.setColumns(List.of("c1", "c2", "c3")); idx.setIncludeColumns(List.of());
+        TableSchema t = table(tn, List.of(id, c1, c2, c3), List.of("id"));
+        t.setIndexes(List.of(idx));
+        ConversionResult r = exec(t, false);
+        // Table must still be created (without the over-limit index)
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "Wide index must be dropped (not fail DDL execution). Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn), "Table must be created even when index is dropped: " + tn);
+        // Warning must be recorded
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("idx_wide_cols") && w.contains("1071")),
+                "Must warn about 1071 key-length drop: " + r.getWarnings());
+        drop(tn);
+    }
 }
