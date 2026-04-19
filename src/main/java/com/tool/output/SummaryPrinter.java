@@ -6,7 +6,6 @@ import com.tool.schema.verifier.VerifyResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Prints the final VERIFY SUMMARY table to stdout.
@@ -123,7 +122,7 @@ public class SummaryPrinter {
         boolean firstGroup = true;
         for (String kind : List.of("NOTE", "MISMATCH", "SKIP", "ERROR")) {
             List<IssueRow> group = allIssues.stream()
-                    .filter(r -> kind.equals(r.kind())).collect(Collectors.toList());
+                    .filter(r -> kind.equals(r.kind())).toList();
             if (group.isEmpty()) continue;
             if (!firstGroup) System.out.println(sep);
             firstGroup = false;

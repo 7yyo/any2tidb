@@ -12,9 +12,9 @@ import com.tool.pipeline.steps.PreCheckStep;
 import com.tool.pipeline.steps.SchemaMigrateStep;
 import com.tool.pipeline.steps.VerifyStep;
 import com.tool.schema.converter.SchemaConverter;
-import com.tool.schema.extractor.SqlServerExtractor;
+import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.verifier.SchemaVerifier;
-import com.tool.schema.writer.TiDBWriter;
+import com.tool.schema.writer.SchemaWriter;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.SpringApplication;
@@ -29,13 +29,13 @@ import java.util.List;
 public class App implements ApplicationRunner {
 
     private final AppConfig config;
-    private final SqlServerExtractor extractor;
+    private final SchemaExtractor extractor;
     private final SchemaConverter converter;
-    private final TiDBWriter writer;
+    private final SchemaWriter writer;
     private final SchemaVerifier verifier;
 
-    public App(AppConfig config, SqlServerExtractor extractor, SchemaConverter converter,
-               TiDBWriter writer, SchemaVerifier verifier) {
+    public App(AppConfig config, SchemaExtractor extractor, SchemaConverter converter,
+               SchemaWriter writer, SchemaVerifier verifier) {
         this.config    = config;
         this.extractor = extractor;
         this.converter = converter;
@@ -43,22 +43,7 @@ public class App implements ApplicationRunner {
         this.verifier  = verifier;
     }
 
-    public static void main(String[] args) {
-        SpringApplication.run(App.class, args);
-    }
-
-    @Override
-    public void run(ApplicationArguments args) throws Exception {
-        boolean dryRun = args.containsOption("dry-run");
-
-        List<String> tablesOverride = null;
-        if (args.containsOption("tables")) {
-            String val = args.getOptionValues("tables").get(0);
-            tablesOverride = Arrays.stream(val.split(","))
-                    .map(String::trim).toList();
-        }
-
-        // Banner
+    private void printBanner(boolean dryRun, List<String> tablesOverride) {
         System.out.println("┌─────────────────────────────────────────┐");
         System.out.println("│  ms2tidb  SQL Server → TiDB Migration   │");
         System.out.println("├──────────┬──────────────────────────────┤");
@@ -78,6 +63,25 @@ public class App implements ApplicationRunner {
             System.out.printf("│  tables* │  %-28s│%n", String.join(", ", tablesOverride));
         System.out.println("└──────────┴──────────────────────────────┘");
         System.out.println();
+    }
+
+    public static void main(String[] args) {
+        SpringApplication.run(App.class, args);
+    }
+
+    @Override
+    public void run(ApplicationArguments args) throws Exception {
+        boolean dryRun = args.containsOption("dry-run");
+
+        List<String> tablesOverride = null;
+        if (args.containsOption("tables")) {
+            String val = args.getOptionValues("tables").get(0);
+            tablesOverride = Arrays.stream(val.split(","))
+                    .map(String::trim).toList();
+        }
+
+        // Banner
+        printBanner(dryRun, tablesOverride);
 
         try (StructuredLogger log = StructuredLogger.open("ms2tidb.log")) {
             log.log("INFO", "ms2tidb started");
