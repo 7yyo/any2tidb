@@ -336,4 +336,15 @@ class SchemaConverterTest {
         assertTrue(ddl.contains("CURRENT_TIMESTAMP(6)"),
                 "DATETIME(6) column with GETUTCDATE() should fall back to CURRENT_TIMESTAMP(6), got: " + ddl);
     }
+
+    @Test
+    void datetime2Scale0_getdate_emitsCurrentTimestamp6() {
+        // datetime2(0) → DATETIME(6) in TiDB; DEFAULT must match: CURRENT_TIMESTAMP(6)
+        TableSchema t = twoColTableWithScale("created_at", "datetime2", 0, "(getdate())");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertTrue(ddl.contains("CURRENT_TIMESTAMP(6)"),
+                "DATETIME(6) column (from datetime2 scale=0) must use CURRENT_TIMESTAMP(6), got: " + ddl);
+    }
 }

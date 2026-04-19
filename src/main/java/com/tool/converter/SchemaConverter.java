@@ -68,13 +68,21 @@ public class SchemaConverter {
 
             String rawDefault = col.getDefaultValue();
             String defaultVal = typeMapper.mapDefaultValue(rawDefault);
+            // Derive the precision of DATETIME columns from the mapped TiDB type (e.g. DATETIME(6) → 6)
+            // so that CURRENT_TIMESTAMP and UTC_TIMESTAMP fallbacks always match the column precision.
+            String tidbType = mapped.tidbType().toUpperCase();
+            int datetimePrecision = 0;
+            if (tidbType.startsWith("DATETIME(") && tidbType.endsWith(")")) {
+                try {
+                    datetimePrecision = Integer.parseInt(tidbType.substring("DATETIME(".length(), tidbType.length() - 1));
+                } catch (NumberFormatException ignored) { }
+            }
             // If the mapped default is CURRENT_TIMESTAMP but the column has explicit precision,
             // TiDB requires the precision to match: CURRENT_TIMESTAMP(n)
-            if ("CURRENT_TIMESTAMP".equals(defaultVal) && col.getScale() != null && col.getScale() > 0) {
-                defaultVal = "CURRENT_TIMESTAMP(" + col.getScale() + ")";
+            if ("CURRENT_TIMESTAMP".equals(defaultVal) && datetimePrecision > 0) {
+                defaultVal = "CURRENT_TIMESTAMP(" + datetimePrecision + ")";
             }
             // TiDB rejects CURRENT_TIMESTAMP on DATE/TIME columns; use date/time-appropriate functions
-            String tidbType = mapped.tidbType().toUpperCase();
             if ("CURRENT_TIMESTAMP".equals(defaultVal) || (defaultVal != null && defaultVal.startsWith("CURRENT_TIMESTAMP("))) {
                 if (tidbType.equals("DATE")) {
                     defaultVal = "CURDATE()";
@@ -93,8 +101,8 @@ public class SchemaConverter {
             if ("UTC_TIMESTAMP()".equals(defaultVal)) {
                 result.addWarning("column '" + col.getName() + "': UTC_TIMESTAMP() is not supported as a TiDB DEFAULT — "
                         + "falling back to CURRENT_TIMESTAMP (local time, not UTC)");
-                if (col.getScale() != null && col.getScale() > 0) {
-                    defaultVal = "CURRENT_TIMESTAMP(" + col.getScale() + ")";
+                if (datetimePrecision > 0) {
+                    defaultVal = "CURRENT_TIMESTAMP(" + datetimePrecision + ")";
                 } else {
                     defaultVal = "CURRENT_TIMESTAMP";
                 }
