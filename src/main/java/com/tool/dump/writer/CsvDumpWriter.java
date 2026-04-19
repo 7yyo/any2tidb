@@ -1,0 +1,134 @@
+package com.tool.dump.writer;
+
+import com.tool.dump.extractor.RowBatch;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Writes row batches to Dumpling-compatible CSV files.
+ *
+ * <p>File naming: {@code <outputDir>/<dbName>/<dbName>.<table>.<9-digit-chunk>.csv}
+ * (schema is NOT part of the file name — matches Dumpling/Lightning convention for
+ * MySQL-style databases where there is no schema layer).
+ *
+ * <p>Format:
+ * <ul>
+ *   <li>No header row</li>
+ *   <li>Fields delimited by {@code ,}</li>
+ *   <li>All non-NULL fields wrapped in {@code "}</li>
+ *   <li>NULL fields → {@code \N} (no quotes)</li>
+ *   <li>Internal {@code "} escaped as {@code ""}</li>
+ *   <li>Line terminator: {@code \r\n}</li>
+ *   <li>Encoding: UTF-8 without BOM</li>
+ * </ul>
+ *
+ * <p>Thread-safety: not thread-safe. Use one instance per worker thread.
+ */
+public class CsvDumpWriter implements DumpWriter {
+
+    private static final String CRLF = "\r\n";
+    private static final int BUFFER_SIZE = 64 * 1024; // 64 KB
+
+    /** Maximum bytes per file before rolling to the next chunk. */
+    private final long fileSizeThresholdBytes;
+
+    /** Tracks open-file state keyed by "dbName\0schema\0table". */
+    private final Map<String, OpenFile> openFiles = new HashMap<>();
+
+    /**
+     * @param fileSizeThresholdBytes roll to a new chunk file once the current
+     *                               file exceeds this size; use {@link Long#MAX_VALUE}
+     *                               to disable splitting.
+     */
+    public CsvDumpWriter(long fileSizeThresholdBytes) {
+        this.fileSizeThresholdBytes = fileSizeThresholdBytes;
+    }
+
+    @Override
+    public void writeBatch(Path outputDir, String dbName, String schema, String table,
+                           List<String> columns, RowBatch batch) throws Exception {
+        if (batch.rows().isEmpty()) return;
+
+        String key = dbName + '\0' + schema + '\0' + table;
+        OpenFile of = openFiles.computeIfAbsent(key,
+                k -> new OpenFile(outputDir, dbName, table));
+
+        for (Object[] row : batch.rows()) {
+            // Build CSV line
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < row.length; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(CsvValueFormatter.format(row[i]));
+            }
+            sb.append(CRLF);
+
+            String line = sb.toString();
+            byte[] lineBytes = line.getBytes(StandardCharsets.UTF_8);
+
+            // Roll file if threshold exceeded (check before writing so the first
+            // row always lands in chunk 0 even if it is larger than the threshold)
+            if (of.bytesWritten > 0 && of.bytesWritten + lineBytes.length > fileSizeThresholdBytes) {
+                of.close();
+                of.chunkIndex++;
+                of.bytesWritten = 0;
+                of.open(outputDir, dbName, table);
+            }
+
+            of.writer.write(line);
+            of.bytesWritten += lineBytes.length;
+        }
+        of.writer.flush();
+    }
+
+    @Override
+    public void close() throws Exception {
+        Exception first = null;
+        for (OpenFile of : openFiles.values()) {
+            try { of.close(); } catch (Exception e) { if (first == null) first = e; }
+        }
+        openFiles.clear();
+        if (first != null) throw first;
+    }
+
+    // ── Internal state per table ──────────────────────────────────────────────
+
+    private static final class OpenFile {
+        int chunkIndex = 0;
+        long bytesWritten = 0;
+        BufferedWriter writer;
+
+        OpenFile(Path outputDir, String dbName, String table) {
+            open(outputDir, dbName, table);
+        }
+
+        void open(Path outputDir, String dbName, String table) {
+            try {
+                Path dir = outputDir.resolve(dbName);
+                Files.createDirectories(dir);
+                Path file = dir.resolve(fileName(dbName, table, chunkIndex));
+                // OutputStreamWriter with explicit UTF-8 — no BOM
+                writer = new BufferedWriter(
+                        new OutputStreamWriter(
+                                new FileOutputStream(file.toFile(), /* append= */ false),
+                                StandardCharsets.UTF_8),
+                        BUFFER_SIZE);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        void close() throws IOException {
+            if (writer != null) { writer.flush(); writer.close(); writer = null; }
+        }
+
+        private static String fileName(String db, String table, int chunk) {
+            return String.format("%s.%s.%09d.csv", db, table, chunk);
+        }
+    }
+}
