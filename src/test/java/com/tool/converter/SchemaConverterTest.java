@@ -198,7 +198,8 @@ class SchemaConverterTest {
     }
 
     @Test
-    void defaultValueWithFunction_addsWarning() {
+    void defaultValueWithFunction_getdate_noGenericWarn() {
+        // Bug 3 fix: GETDATE() → CURRENT_TIMESTAMP is a known-safe mapping; no generic warning
         TableSchema t = simpleTable();
         ColumnSchema col = new ColumnSchema();
         col.setName("created_at"); col.setSqlServerType("datetime"); col.setNullable(false);
@@ -207,7 +208,27 @@ class SchemaConverterTest {
         ConversionResult result = new ConversionResult("dbo.users");
         String ddl = converter.toCreateTableDDL(t, result, false);
         assertTrue(ddl.contains("DEFAULT CURRENT_TIMESTAMP"), "DDL should contain translated default: " + ddl);
-        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("default value")));
+        // No generic "verify semantics" warning for well-known mapping
+        assertFalse(result.getWarnings().stream().anyMatch(w -> w.contains("verify semantics")),
+                "GETDATE() is a known-safe mapping and must not produce a generic 'verify semantics' warning");
+    }
+
+    @Test
+    void defaultValueWithUnknownFunction_addsWarning() {
+        // Unknown function-based defaults should be dropped with a warning
+        TableSchema t = simpleTable();
+        ColumnSchema col = new ColumnSchema();
+        col.setName("score"); col.setSqlServerType("int"); col.setNullable(false);
+        col.setDefaultValue("(dbo.fn_default_score())");
+        t.setColumns(java.util.List.of(t.getColumns().get(0), t.getColumns().get(1), col));
+        ConversionResult result = new ConversionResult("dbo.users");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        // Default must be dropped (not passed through to TiDB)
+        assertFalse(ddl.contains("fn_default_score"),
+                "Unknown function default must be dropped from DDL");
+        // A warning must be recorded
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("score") && w.contains("default dropped")),
+                "Unknown function default must produce 'default dropped' warning");
     }
 
     @Test
@@ -346,5 +367,162 @@ class SchemaConverterTest {
         assertNotNull(ddl);
         assertTrue(ddl.contains("CURRENT_TIMESTAMP(6)"),
                 "DATETIME(6) column (from datetime2 scale=0) must use CURRENT_TIMESTAMP(6), got: " + ddl);
+    }
+
+    @Test
+    void longtextColumn_defaultDropped() {
+        // BLOB/TEXT/JSON columns cannot have defaults in TiDB — default must be silently dropped with a warning
+        // Use a non-empty literal default so it survives mapDefaultValue without being nulled out
+        TableSchema t = simpleTable();
+        ColumnSchema col = new ColumnSchema();
+        col.setName("contractSummary"); col.setSqlServerType("nvarchar"); col.setMaxLength(-1); col.setNullable(true);
+        col.setDefaultValue("('N/A')");   // maps to: 'N/A' (quoted literal, non-empty)
+        t.setColumns(java.util.List.of(t.getColumns().get(0), t.getColumns().get(1), col));
+        ConversionResult result = new ConversionResult("dbo.users");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        // ENGINE=InnoDB DEFAULT CHARSET=... contains "DEFAULT" — check column-level default specifically
+        assertFalse(ddl.contains("`contractSummary` LONGTEXT DEFAULT"), "LONGTEXT column must not have a DEFAULT clause: " + ddl);
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("contractSummary") && w.contains("default dropped")),
+                "Must warn that LONGTEXT default was dropped: " + result.getWarnings());
+    }
+
+    @Test
+    void jsonColumn_defaultDropped() {
+        TableSchema t = simpleTable();
+        ColumnSchema col = new ColumnSchema();
+        col.setName("meta"); col.setSqlServerType("json"); col.setNullable(true);
+        col.setDefaultValue("('{}')");
+        t.setColumns(java.util.List.of(t.getColumns().get(0), t.getColumns().get(1), col));
+        ConversionResult result = new ConversionResult("dbo.users");
+        String ddl = converter.toCreateTableDDL(t, result, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("`meta` JSON DEFAULT"), "JSON column must not have a DEFAULT clause: " + ddl);
+        assertTrue(result.getWarnings().stream().anyMatch(w -> w.contains("meta") && w.contains("default dropped")));
+    }
+
+    @Test
+    void numericColumn_emptyStringDefault_dropsDefault() {
+        // SQL Server allows DEFAULT ('') on int/numeric (coerces to 0), TiDB rejects it with [1067]
+        TableSchema t = twoColTable("actionOrder", "numeric", "('')");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("`actionOrder` DECIMAL DEFAULT"),
+                "Numeric column with empty-string default must not emit DEFAULT clause: " + ddl);
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("actionOrder") && w.contains("default dropped")),
+                "Must warn that empty-string default was dropped: " + r.getWarnings());
+    }
+
+    @Test
+    void intColumn_emptyStringDefault_dropsDefault() {
+        TableSchema t = twoColTable("templateVersion", "int", "('')");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("`templateVersion` INT DEFAULT"),
+                "INT column with empty-string default must not emit DEFAULT clause: " + ddl);
+        assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains("templateVersion") && w.contains("default dropped")),
+                "Must warn that empty-string default was dropped: " + r.getWarnings());
+    }
+
+    // ── Type × Default matrix tests ──────────────────────────────────────────
+
+    @Test
+    void numericTypeMatrix_emptyStringDefault_allDropped() {
+        // All numeric SS types must drop empty-string default with a warning
+        String[][] cases = {
+            {"intCol",      "int",     "('')"},
+            {"bigintCol",   "bigint",  "('')"},
+            {"smallintCol", "smallint","('')"},
+            {"tinyintCol",  "tinyint", "('')"},
+            {"decimalCol",  "decimal", "('')"},
+            {"numericCol",  "numeric", "('')"},
+            {"floatCol",    "float",   "('')"},
+            {"realCol",     "real",    "('')"},
+        };
+        for (String[] c : cases) {
+            TableSchema t = twoColTable(c[0], c[1], c[2]);
+            ConversionResult r = new ConversionResult("dbo.tbl");
+            String ddl = converter.toCreateTableDDL(t, r, false);
+            assertNotNull(ddl, "DDL must not be null for " + c[1]);
+            assertFalse(ddl.contains("`" + c[0] + "` " + c[1].toUpperCase() + " DEFAULT"),
+                    c[1] + " empty-string default must be dropped, got: " + ddl);
+            assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains(c[0]) && w.contains("default dropped")),
+                    c[1] + " must warn 'default dropped': " + r.getWarnings());
+        }
+    }
+
+    @Test
+    void temporalTypeMatrix_emptyStringDefault_allDropped() {
+        // All temporal SS types must drop empty-string default with a warning
+        String[][] cases = {
+            {"d",  "date",      "('')"},
+            {"t",  "time",      "('')"},
+            {"dt", "datetime",  "('')"},
+            {"dt2","datetime2", "('')"},
+        };
+        for (String[] c : cases) {
+            TableSchema t = twoColTable(c[0], c[1], c[2]);
+            ConversionResult r = new ConversionResult("dbo.tbl");
+            String ddl = converter.toCreateTableDDL(t, r, false);
+            assertNotNull(ddl, "DDL must not be null for " + c[1]);
+            // Column must not have any DEFAULT clause
+            assertFalse(ddl.contains("`" + c[0] + "` ") && ddl.contains("DEFAULT ''"),
+                    c[1] + " empty-string default must be dropped, got: " + ddl);
+            assertTrue(r.getWarnings().stream().anyMatch(w -> w.contains(c[0]) && w.contains("default dropped")),
+                    c[1] + " must warn 'default dropped': " + r.getWarnings());
+        }
+    }
+
+    @Test
+    void numericTypeMatrix_zeroLiteralDefault_retained() {
+        // Numeric columns with a literal 0 default must retain DEFAULT 0
+        String[][] cases = {
+            {"intCol",    "int",     "((0))"},
+            {"bigintCol", "bigint",  "((0))"},
+            {"decimalCol","decimal", "((0))"},
+            {"floatCol",  "float",   "((0))"},
+        };
+        for (String[] c : cases) {
+            TableSchema t = twoColTable(c[0], c[1], c[2]);
+            ConversionResult r = new ConversionResult("dbo.tbl");
+            String ddl = converter.toCreateTableDDL(t, r, false);
+            assertNotNull(ddl, "DDL must not be null for " + c[1]);
+            assertTrue(ddl.contains("DEFAULT 0"),
+                    c[1] + " with literal 0 default must retain DEFAULT 0, got: " + ddl);
+            assertFalse(r.getWarnings().stream().anyMatch(w -> w.contains(c[0]) && w.contains("default dropped")),
+                    c[1] + " literal 0 must NOT produce 'default dropped' warning: " + r.getWarnings());
+        }
+    }
+
+    @Test
+    void stringTypeMatrix_emptyStringDefault_retained() {
+        // String (varchar/nvarchar/char) columns may have DEFAULT '' — TiDB accepts it
+        // Note: maxLength must be set so varchar/nvarchar don't map to LONGTEXT
+        // (LONGTEXT columns have their defaults dropped separately).
+        String[][] cases = {
+            {"vcol",  "varchar",  "('')"},
+            {"nvcol", "nvarchar", "('')"},
+            {"ccol",  "char",     "('')"},
+        };
+        for (String[] c : cases) {
+            TableSchema t = new TableSchema();
+            t.setSchemaName("dbo"); t.setTableName("tbl");
+            ColumnSchema id = new ColumnSchema();
+            id.setName("id"); id.setSqlServerType("int"); id.setNullable(false); id.setIdentity(true);
+            ColumnSchema col = new ColumnSchema();
+            col.setName(c[0]); col.setSqlServerType(c[1]); col.setMaxLength(50); col.setNullable(true);
+            col.setDefaultValue(c[2]);
+            t.setColumns(java.util.List.of(id, col));
+            t.setPrimaryKeyColumns(java.util.List.of("id"));
+            ConversionResult r = new ConversionResult("dbo.tbl");
+            String ddl = converter.toCreateTableDDL(t, r, false);
+            assertNotNull(ddl, "DDL must not be null for " + c[1]);
+            assertTrue(ddl.contains("DEFAULT ''"),
+                    c[1] + " empty-string default must be retained as DEFAULT '', got: " + ddl);
+            assertFalse(r.getWarnings().stream().anyMatch(w -> w.contains(c[0]) && w.contains("default dropped")),
+                    c[1] + " empty-string default must NOT produce 'default dropped' warning: " + r.getWarnings());
+        }
     }
 }

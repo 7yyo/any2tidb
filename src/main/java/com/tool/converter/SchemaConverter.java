@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Component
@@ -107,13 +108,56 @@ public class SchemaConverter {
                     defaultVal = "CURRENT_TIMESTAMP";
                 }
             }
+            if ("UUID()".equals(defaultVal)) {
+                result.addWarning("column '" + col.getName() + "': UUID() is not supported as a TiDB DEFAULT expression — default dropped");
+                defaultVal = null;
+            }
+            // BLOB/TEXT/JSON/LONGTEXT/LONGBLOB columns cannot have a default value in TiDB/MySQL
+            if (defaultVal != null) {
+                String baseType = tidbType.replaceAll("\\(.*\\)", "").trim();
+                if (baseType.equals("LONGTEXT") || baseType.equals("LONGBLOB") ||
+                        baseType.equals("TEXT") || baseType.equals("BLOB") ||
+                        baseType.equals("MEDIUMTEXT") || baseType.equals("MEDIUMBLOB") ||
+                        baseType.equals("JSON")) {
+                    result.addWarning("column '" + col.getName() + "': " + baseType
+                            + " column cannot have a default value in TiDB — default dropped");
+                    defaultVal = null;
+                }
+            }
+            // Drop any default that is still a function call that TiDB cannot evaluate as a DEFAULT
+            // (e.g. lower(), dbo.fn_xxx()). Only well-known safe mappings and literal values survive.
+            if (defaultVal != null && defaultVal.contains("(")) {
+                boolean isKnownSafeFunction =
+                        defaultVal.startsWith("CURRENT_TIMESTAMP") ||
+                        defaultVal.equals("CURDATE()") ||
+                        defaultVal.equals("UUID()");
+                if (!isKnownSafeFunction) {
+                    result.addWarning("column '" + col.getName() + "': default value '"
+                            + rawDefault.trim() + "' contains a function not supported as a TiDB DEFAULT — default dropped");
+                    defaultVal = null;
+                }
+            }
+            // Drop numeric/boolean literal defaults on temporal columns — TiDB rejects them ([1067])
+            if (defaultVal != null && isTemporalTidbType(tidbType) && isNumericLiteral(defaultVal)) {
+                result.addWarning("column '" + col.getName() + "': numeric default '" + defaultVal
+                        + "' is not valid for " + tidbType + " column — default dropped");
+                defaultVal = null;
+            }
+            // Drop empty/blank string defaults on temporal columns — TiDB rejects them ([1067])
+            if (defaultVal != null && isTemporalTidbType(tidbType) && isEmptyStringLiteral(defaultVal)) {
+                result.addWarning("column '" + col.getName() + "': empty string default is not valid for "
+                        + tidbType + " column — default dropped");
+                defaultVal = null;
+            }
+            // Drop empty-string defaults on numeric columns — SQL Server silently coerces '' to 0,
+            // but TiDB rejects them with [1067] Invalid default value ([1067])
+            if (defaultVal != null && isNumericTidbType(tidbType) && isEmptyStringLiteral(defaultVal)) {
+                result.addWarning("column '" + col.getName() + "': empty string default is not valid for "
+                        + tidbType + " column (SQL Server coerces '' to 0) — default dropped");
+                defaultVal = null;
+            }
             if (defaultVal != null && !col.isIdentity()) {
                 colDef.append(" DEFAULT ").append(defaultVal);
-                // Warn if the original default was a function call that required translation
-                if (rawDefault != null && rawDefault.contains("(")) {
-                    result.addWarning("column '" + col.getName() + "': default value '"
-                            + rawDefault.trim() + "' translated to '" + defaultVal + "' — verify semantics");
-                }
             }
             if (col.getComment() != null && !col.getComment().isBlank()) {
                 colDef.append(" COMMENT '").append(col.getComment().replace("'", "''")).append("'");
@@ -177,5 +221,29 @@ public class SchemaConverter {
 
     private String quoteCols(List<String> cols) {
         return cols.stream().map(c -> "`" + c.trim() + "`").collect(Collectors.joining(", "));
+    }
+
+    private static boolean isTemporalTidbType(String tidbType) {
+        return tidbType.equals("DATE") || tidbType.equals("TIME") ||
+               tidbType.equals("DATETIME") || tidbType.startsWith("DATETIME(");
+    }
+
+    private static boolean isNumericTidbType(String tidbType) {
+        String base = tidbType.replaceAll("\\(.*\\)", "").trim();
+        // Strip UNSIGNED / SIGNED qualifiers (e.g. "TINYINT UNSIGNED" → "TINYINT")
+        base = base.replaceAll("(?i)\\s+(UNSIGNED|SIGNED)$", "").trim();
+        return base.equals("INT") || base.equals("BIGINT") || base.equals("SMALLINT") ||
+               base.equals("TINYINT") || base.equals("DECIMAL") || base.equals("NUMERIC") ||
+               base.equals("FLOAT") || base.equals("DOUBLE") || base.equals("REAL");
+    }
+
+    private static final Pattern NUMERIC_LITERAL = Pattern.compile("^-?\\d+(\\.\\d+)?$");
+    private static boolean isNumericLiteral(String val) {
+        return NUMERIC_LITERAL.matcher(val.trim()).matches();
+    }
+
+    private static boolean isEmptyStringLiteral(String val) {
+        String t = val.trim();
+        return t.equals("''") || t.equals("\"\"");
     }
 }
