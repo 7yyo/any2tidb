@@ -31,4 +31,17 @@ class MigrationPipelineTest {
         StepContext ctx = new StepContext();
         assertNull(ctx.get("missing", String.class));
     }
+
+    @Test
+    void stepContext_has_trueAfterPut() {
+        StepContext ctx = new StepContext();
+        ctx.put("x", 42);
+        assertTrue(ctx.has("x"));
+    }
+
+    @Test
+    void stepContext_has_falseForMissing() {
+        StepContext ctx = new StepContext();
+        assertFalse(ctx.has("nope"));
+    }
 }
