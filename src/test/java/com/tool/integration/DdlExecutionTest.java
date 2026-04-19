@@ -597,4 +597,30 @@ class DdlExecutionTest {
         }
         drop(tn);
     }
+
+    /**
+     * DE21: DATE column with GETDATE() default.
+     * TypeMapper maps GETDATE() → CURRENT_TIMESTAMP regardless of column type.
+     * TiDB rejects DEFAULT CURRENT_TIMESTAMP on a DATE column.
+     * This test documents the current behavior (WARNING expected, not ERROR,
+     * because SchemaConverter should either skip the default or translate it).
+     * If this test fails with Status.ERROR, a bug exists in TypeMapper/SchemaConverter.
+     */
+    @Test @Order(21)
+    void de21_dateColumnWithGetdateDefault() throws Exception {
+        String tn = "de_date_default";
+        drop(tn);
+        ColumnSchema id = col("id", "int", false);
+        ColumnSchema d = colDefault("event_date", "date", true, "(getdate())");
+
+        TableSchema t = table(tn, List.of(id, d), List.of("id"));
+        ConversionResult r = exec(t, false);
+        assertNotEquals(ConversionResult.Status.ERROR, r.getStatus(),
+                "DATE + GETDATE() default should not produce a fatal DDL error. " +
+                "If TiDB rejected DEFAULT CURRENT_TIMESTAMP on DATE column, " +
+                "TypeMapper/SchemaConverter must be fixed to emit CURDATE() or drop the default. " +
+                "Error: " + r.getErrorMessage());
+        assertTrue(tableExists(tn));
+        drop(tn);
+    }
 }
