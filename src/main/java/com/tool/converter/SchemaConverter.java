@@ -88,6 +88,17 @@ public class SchemaConverter {
                     defaultVal = "CURRENT_TIMESTAMP";
                 }
             }
+            // TiDB does not support UTC_TIMESTAMP() as a column DEFAULT expression;
+            // fall back to CURRENT_TIMESTAMP (or CURRENT_TIMESTAMP(n) for datetime2 columns)
+            if ("UTC_TIMESTAMP()".equals(defaultVal)) {
+                result.addWarning("column '" + col.getName() + "': UTC_TIMESTAMP() is not supported as a TiDB DEFAULT — "
+                        + "falling back to CURRENT_TIMESTAMP (local time, not UTC)");
+                if (col.getScale() != null && col.getScale() > 0) {
+                    defaultVal = "CURRENT_TIMESTAMP(" + col.getScale() + ")";
+                } else {
+                    defaultVal = "CURRENT_TIMESTAMP";
+                }
+            }
             if (defaultVal != null && !col.isIdentity()) {
                 colDef.append(" DEFAULT ").append(defaultVal);
                 // Warn if the original default was a function call that required translation

@@ -309,4 +309,31 @@ class SchemaConverterTest {
         assertFalse(ddl.contains("CURRENT_TIMESTAMP("),
                 "DATETIME (no precision) must not have CURRENT_TIMESTAMP(n), got: " + ddl);
     }
+
+    private TableSchema twoColTableWithScale(String colName, String sqlType, int scale, String defaultVal) {
+        TableSchema t = new TableSchema();
+        t.setSchemaName("dbo");
+        t.setTableName("tbl");
+        ColumnSchema id = new ColumnSchema();
+        id.setName("id"); id.setSqlServerType("int"); id.setNullable(false); id.setIdentity(true);
+        ColumnSchema c = new ColumnSchema();
+        c.setName(colName); c.setSqlServerType(sqlType); c.setNullable(false);
+        c.setScale(scale);
+        c.setDefaultValue(defaultVal);
+        t.setColumns(List.of(id, c));
+        t.setPrimaryKeyColumns(List.of("id"));
+        return t;
+    }
+
+    @Test
+    void datetime6Column_utcTimestampDefault_fallsBackToCurrentTimestamp6() {
+        TableSchema t = twoColTableWithScale("synced_at", "datetime2", 6, "(GETUTCDATE())");
+        ConversionResult r = new ConversionResult("dbo.tbl");
+        String ddl = converter.toCreateTableDDL(t, r, false);
+        assertNotNull(ddl);
+        assertFalse(ddl.contains("UTC_TIMESTAMP"),
+                "DATETIME(6) column with GETUTCDATE() — TiDB rejects UTC_TIMESTAMP() as DEFAULT; must fall back, got: " + ddl);
+        assertTrue(ddl.contains("CURRENT_TIMESTAMP(6)"),
+                "DATETIME(6) column with GETUTCDATE() should fall back to CURRENT_TIMESTAMP(6), got: " + ddl);
+    }
 }
