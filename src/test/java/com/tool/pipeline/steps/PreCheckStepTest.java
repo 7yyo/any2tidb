@@ -48,6 +48,8 @@ class PreCheckStepTest {
         assertNotNull(ctx.get("schemas", List.class));
         assertNotNull(ctx.get("tables", List.class));
         assertFalse((Boolean) ctx.get("dryRun", Boolean.class));
+        assertNotNull(ctx.get("dropIfExists", Boolean.class));
+        assertNotNull(ctx.get("continueOnError", Boolean.class));
     }
 
     @Test

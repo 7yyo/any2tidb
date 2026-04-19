@@ -16,6 +16,7 @@ import java.util.List;
  *   "tablesOverride" (List<String>)  — optional CLI override, may be null
  *
  * Writes to context:
+ *   "dryRun"          (Boolean)       — re-published after null-safe normalization
  *   "schemas"        (List<String>)
  *   "tables"         (List<String>)
  *   "dropIfExists"   (Boolean)
@@ -44,10 +45,12 @@ public class PreCheckStep implements MigrationStep {
             return StepResult.fatal("target.host is not configured in application.yml");
         }
 
+        Boolean dryRun = ctx.get("dryRun", Boolean.class);
         List<String> tablesOverride = ctx.get("tablesOverride", List.class);
         List<String> schemas = config.getConvert().getSchemas();
         List<String> tables  = tablesOverride != null ? tablesOverride : config.getConvert().getTables();
 
+        ctx.put("dryRun",          dryRun != null && dryRun);
         ctx.put("schemas",         schemas  != null ? schemas : List.of());
         ctx.put("tables",          tables   != null ? tables  : List.of());
         ctx.put("dropIfExists",    config.getConvert().isDropIfExists());
