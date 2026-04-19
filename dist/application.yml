@@ -1,17 +1,17 @@
 # ┌─────────────────────────────────────────────────────────────────────────┐
 # │  any2tidb  — Any DB → TiDB  完整配置说明                               │
 # │                                                                         │
-# │  Usage（将 application.yml 与 jar 放同目录，直接运行）:                  │
-# │    java -jar any2tidb-1.0.0.jar                                        │
+# │  Usage（将 any2tidb、application.yml 与 jar 放同目录，直接运行）:       │
+# │    ./any2tidb                                                           │
 # │                                                                         │
 # │  Dry-run（只打印 DDL，不写入 TiDB）:                                    │
-# │    java -jar any2tidb-1.0.0.jar --dry-run                              │
+# │    ./any2tidb --dry-run                                                 │
 # │                                                                         │
 # │  命令行临时指定表（覆盖 convert.tables 配置）:                           │
-# │    java -jar any2tidb-1.0.0.jar --tables=orders,customers              │
+# │    ./any2tidb --tables=orders,customers                                 │
 # │                                                                         │
 # │  配置文件不在当前目录时:                                                  │
-# │    java -jar any2tidb-1.0.0.jar \                                      │
+# │    ./any2tidb \                                                         │
 # │         --spring.config.location=/path/to/application.yml              │
 # └─────────────────────────────────────────────────────────────────────────┘
 
