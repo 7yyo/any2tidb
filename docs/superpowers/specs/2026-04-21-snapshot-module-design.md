@@ -27,7 +27,7 @@ any2tidb snapshot [options]
                          +-- DebeziumEngine (AsyncEmbeddedEngine, one per DB)
                          |      |
                          |      +-- SqlServerConnector (source)
-                         |      +-- SnapshotSink (ChangeConsumer)
+                         |      +-- SnapshotSink (JSON parser)
                          |                |
                          |                +-- SinkRecordConverter (Connect -> JDBC)
                          |                +-- TiDBBatchWriter (batch INSERT to TiDB)
@@ -45,9 +45,10 @@ com.tool.snapshot/
 +-- engine/
 |   +-- DebeziumEngineFactory.java -- builds AsyncEmbeddedEngine per DB
 +-- sink/
-|   +-- SnapshotSink.java          -- ChangeConsumer impl, routes events
+|   +-- SnapshotSink.java          -- Plain POJO, parses JSON events
+|   +-- SnapshotJsonParser.java   -- Jackson JSON parser for Debezium envelopes
 |   +-- TiDBBatchWriter.java       -- batch INSERT to TiDB
-|   +-- SinkRecordConverter.java   -- Kafka Connect schema -> JDBC type mapping
+   +-- SinkRecordConverter.java   -- Map<String,Object> -> JDBC type mapping
 +-- cdc/
 |   +-- CdcPreChecker.java         -- verifies CDC prerequisites on SQL Server
 +-- model/
@@ -65,7 +66,7 @@ com.tool.snapshot/
 | `output` (ProgressReporter) | Progress display | Console progress (zero coupling) |
 | `targetDataSource` Bean | Reuse pool | Write to TiDB |
 | Debezium (embedded, api, connector-sqlserver) | New Maven dep | Snapshot engine |
-| Kafka Connect API (transitive) | Record types | SourceRecord, Schema, Struct |
+| Jackson Databind (transitive from Debezium) | JSON parsing | Parse Debezium JSON events |
 
 ### What snapshot does NOT depend on:
 
@@ -118,7 +119,7 @@ Implements `MigrationStep`. Orchestration flow:
 1. **CDC Pre-check** -- run CdcPreChecker against each target database
 2. **Per-database sequential processing** (each DB needs its own Debezium engine):
    - Build engine via DebeziumEngineFactory
-   - Run engine (blocking) with SnapshotSink as ChangeConsumer
+   - Run engine (blocking) with SnapshotSink accepting JSON events
    - Collect SnapshotTableResult
 3. **Write snapshot-meta.json** with LSN per database
 4. **Print progress table** (same format as DumpStep)
@@ -127,7 +128,7 @@ Database processing is sequential for error isolation and connection management.
 
 ### 5.3 DebeziumEngineFactory.java
 
-Builds `AsyncEmbeddedEngine` per database:
+Builds `AsyncEmbeddedEngine` per database using Debezium 3.5 verified API:
 
 ```java
 Properties props = new Properties();
@@ -147,70 +148,116 @@ props.setProperty("max.queue.size", String.valueOf(maxQueueSize));
 props.setProperty("poll.interval.ms", String.valueOf(pollIntervalMs));
 props.setProperty("offset.flush.interval.ms", String.valueOf(offsetCommitIntervalMs));
 props.setProperty("snapshot.max.threads", String.valueOf(maxThreads));
-// Filter tables: if CLI --tables specified, use those; otherwise capture all dbo tables
-if (tables != null && !tables.isEmpty()) {
-    String tableList = tables.stream()
-            .map(t -> "dbo\\." + t)
-            .collect(java.util.stream.Collectors.joining(","));
-    props.setProperty("table.include.list", tableList);
-} else {
-    props.setProperty("table.include.list", "dbo\\..*");
-}
+props.setProperty("table.include.list", buildTableIncludeList(tables));
+
+// Debezium 3.5 API: create(Json.class) → Builder<ChangeEvent<String, String>>
+// .notifying(Consumer<ChangeEvent<String, String>>) — each event value is JSON
+DebeziumEngine<ChangeEvent<String, String>> engine = DebeziumEngine.create(Json.class)
+        .using(props)
+        .notifying(sink::accept)   // sink.accept(List<ChangeEvent>) adapts to batch
+        .using((CompletionCallback) (success, msg, error) -> { ... })
+        .build();
 ```
 
-### 5.4 SnapshotSink.java (implements ChangeConsumer<SourceRecord>)
+Engine execution: `engine` implements `Runnable`. Run via `executor.submit(engine::run)`. Blocks until snapshot completes or times out. No `engine.await()` method exists in 3.5.
 
-Batch-level event processing with RecordCommitter for exactly-once semantics within a batch:
+### 5.4 SnapshotSink.java
+
+Plain POJO (NOT a ChangeConsumer). Receives Debezium `ChangeEvent<String, String>` batches, parses JSON, routes to TiDBBatchWriter.
 
 ```java
-@Override
-public void accept(List<SourceRecord> records,
-                   RecordCommitter<SourceRecord> committer)
-        throws InterruptedException {
-    for (SourceRecord record : records) {
-        try {
-            if (isSnapshotEvent(record)) {
-                Struct value = (Struct) record.value();
-                Struct after = (Struct) value.get("after");
-                if (after != null) {
-                    tidbWriter.accumulate(extractTableName(record), after);
-                }
-                trackLsn(record);  // Extract commit_lsn/change_lsn from source block
+public class SnapshotSink {
+    private final TiDBBatchWriter batchWriter;
+    private final SnapshotJsonParser parser;  // Jackson ObjectMapper wrapper
+
+    /**
+     * Called by DebeziumEngine .notifying() callback.
+     * Adapts List<ChangeEvent<String, String>> to individual events.
+     */
+    public void accept(List<ChangeEvent<String, String>> events) {
+        for (ChangeEvent<String, String> event : events) {
+            try {
+                String json = event.value();
+                if (json == null) continue;
+                SnapshotJsonParser.ParsedRecord record = parser.parse(json);
+                if (!record.isSnapshot()) continue;
+                if (record.after() == null) continue;
+                batchWriter.accumulate(record.dbName(), record.table(), record.after());
+                trackLsn(record);
+            } catch (Exception e) {
+                log.error("record failed: {}", e.getMessage());
             }
-            committer.markProcessed(record);
-        } catch (Exception e) {
-            log.error("record failed: {}", e.getMessage());
         }
     }
-    committer.markBatchFinished();
 }
 ```
 
-### 5.5 TiDBBatchWriter
+### 5.5 SnapshotJsonParser.java (new)
 
-- Map-based buffering by table name: `Map<String, List<Struct>>`
+Jackson-based JSON parser for Debezium event envelopes. Extracts:
+
+```java
+public class SnapshotJsonParser {
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    record ParsedRecord(
+        String dbName, String schema, String table,
+        Map<String, Object> before, Map<String, Object> after,
+        String op, String commitLsn, String changeLsn, String snapshot
+    ) {
+        boolean isSnapshot() { return "true".equals(snapshot) || "last".equals(snapshot); }
+    }
+
+    ParsedRecord parse(String json) {
+        JsonNode root = mapper.readTree(json);
+        JsonNode source = root.get("source");
+        JsonNode payload = root.get("payload");
+        // topic format: any2tidb_<dbName>.<schema>.<table>
+        String topic = root.path("topic").asText();
+        // OR extract from source.db / source.table
+        String dbName = source.path("db").asText();
+        String schema = source.path("schema").asText();
+        String table = source.path("table").asText();
+        // Extract commit_lsn / change_lsn from source
+        String commitLsn = source.path("commit_lsn").asText();
+        String changeLsn = source.path("change_lsn").asText();
+        // Extract before/after as Map<String, Object>
+        Map<String, Object> after = toMap(payload.get("after"));
+        String snapshot = source.path("snapshot").asText();
+        return new ParsedRecord(dbName, schema, table, null, after,
+                root.path("op").asText(), commitLsn, changeLsn, snapshot);
+    }
+}
+```
+
+**Note:** The exact JSON structure depends on Debezium's `Json` serialization format. The parser will be refined during Task 8 implementation after observing actual Debezium output. Key fields (`after`, `source.commit_lsn`, `source.snapshot`) are standard Debezium envelope fields.
+
+### 5.6 TiDBBatchWriter
+
+- Map-based buffering by table name: `Map<String, List<Map<String, Object>>>`
 - Multi-value INSERT: `INSERT INTO db.table (col1,col2) VALUES (?,?),(?,?)...`
 - Flush at `batchInsertSize` threshold
 - Uses injected `targetDataSource` (HikariCP pool)
 - Thread-safe: single-writer (SnapshotSink is called sequentially by Debezium)
 - Tracks per-table and total row counts
 
-### 5.6 SinkRecordConverter
+### 5.7 SinkRecordConverter
 
-Maps Kafka Connect schema types to JDBC `PreparedStatement` methods:
+Maps JSON-parsed `Map<String, Object>` values to JDBC `PreparedStatement` methods:
 
-| Connect Schema Type | JDBC Method | SQL Server Source Types |
+| JSON value type (Jackson) | JDBC Method | SQL Server Source Types |
 |---|---|---|
-| INT8 / INT16 / INT32 | `setInt` | tinyint, smallint, int |
-| INT64 | `setLong` | bigint |
-| FLOAT32 / FLOAT64 | `setDouble` | real, float |
-| BYTES (decimal.logical) | `setBigDecimal` | decimal, numeric, money |
-| BYTES (microTimestamp) | `setTimestamp` | datetime, datetime2 |
-| STRING | `setString` | varchar, nvarchar, char |
-| BYTES (binary) | `setBytes` | varbinary, binary |
-| BOOLEAN | `setBoolean` | bit |
+| Integer / Short | `setInt` | tinyint, smallint, int |
+| Long | `setLong` | bigint |
+| Double / Float | `setDouble` | real, float |
+| BigDecimal | `setBigDecimal` | decimal, numeric, money |
+| String (timestamp pattern) | `setTimestamp` | datetime, datetime2 |
+| String | `setString` | varchar, nvarchar, char |
+| byte[] | `setBytes` | varbinary, binary |
+| Boolean | `setBoolean` | bit |
+| null | `setNull` | any nullable column |
 
-Simpler than `schema/TypeMapper` because Debezium already resolves SQL Server types into Connect types.
+Simpler than `schema/TypeMapper` because Jackson auto-resolves JSON types to Java types.
 
 ### 5.7 CdcPreChecker
 
@@ -426,7 +473,7 @@ snapshot:
 
 | Decision | Rationale |
 |---|---|
-| ChangeConsumer (not Consumer) | Batch-aware INSERT, exactly-once within batch |
+| Consumer + JSON (not ChangeConsumer) | Debezium 3.5 Json format yields ChangeEvent<String,String>. Simple Consumer callback is sufficient. |
 | Sequential DB processing | Each DB = separate engine; simpler error isolation |
 | snapshot.mode=initial_only | any2tidb scope = one-time full sync, not continuous replication |
 | SinkRecordConverter separate from TypeMapper | Debezium resolves SS types to Connect types; simpler mapping |
