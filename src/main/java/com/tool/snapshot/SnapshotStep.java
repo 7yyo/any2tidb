@@ -186,7 +186,7 @@ public class SnapshotStep implements MigrationStep {
 
     private List<String[]> discoverTables(Connection conn, List<String> tableFilter) throws Exception {
         List<String[]> tables = new ArrayList<>();
-        String sql = "SELECT s.name, t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id";
+        String sql = "SELECT s.name, t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name NOT IN ('cdc')";
         if (tableFilter != null && !tableFilter.isEmpty()) {
             String inClause = tableFilter.stream().map(t -> "?").collect(Collectors.joining(","));
             sql += " WHERE t.name IN (" + inClause + ")";
