@@ -99,9 +99,7 @@ public class CdcPreChecker {
         try {
             boolean agentRunning = isAgentRunning(conn);
             if (!agentRunning) {
-                return new CdcCheckResult(true,
-                        "SQL Server Agent is not running. Start it before using snapshot.", false, false,
-                        tables.stream().map(t -> t[1]).toList());
+                log.warn("[\"SQL Server Agent is not running (not required for Debezium)\"]");
             }
 
             boolean cdcEnabled = isCdcEnabled(conn, dbName);

@@ -110,18 +110,29 @@ class CdcPreCheckerTest {
     }
 
     @Test
-    void checkResult_hasErrorWhenAgentNotRunning() throws Exception {
+    void checkResult_warnsButContinuesWhenAgentNotRunning() throws Exception {
         ResultSet rs = mock(ResultSet.class);
-        when(rs.next()).thenReturn(false);
+        when(rs.next()).thenReturn(false); // Agent not running
         PreparedStatement ps = mock(PreparedStatement.class);
         when(ps.executeQuery()).thenReturn(rs);
         when(conn.prepareStatement(anyString())).thenReturn(ps);
+
+        // Second call: Agent not running, but CDC enabled (returns 1), table CDC exists (returns "Users")
+        ResultSet cdcRs = mock(ResultSet.class);
+        when(cdcRs.next()).thenReturn(true);
+        when(cdcRs.getInt(1)).thenReturn(1);
+        PreparedStatement cdcPs = mock(PreparedStatement.class);
+        when(cdcPs.executeQuery()).thenReturn(cdcRs);
+        // Chain: first call (agent check) returns false, second call (CDC check) returns true
+        when(conn.prepareStatement(contains("dm_exec_sessions"))).thenReturn(ps);
+        when(conn.prepareStatement(contains("is_cdc_enabled"))).thenReturn(cdcPs);
+        when(conn.prepareStatement(contains("change_tables"))).thenReturn(cdcPs);
+        when(cdcRs.getString(1)).thenReturn("Users");
 
         CdcPreChecker checker = new CdcPreChecker(sourceConfig);
         CdcPreChecker.CdcCheckResult result = checker.check(conn, "testdb",
                 List.<String[]>of(new String[]{"dbo", "Users"}), false);
 
-        assertTrue(result.hasError());
-        assertNotNull(result.errorMessage());
+        assertFalse(result.hasError());
     }
 }
