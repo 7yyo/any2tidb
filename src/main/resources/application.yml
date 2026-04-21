@@ -10,16 +10,11 @@ target:
   username: root
   password: ""
 
-convert:
-  schemas:
-  tables:
-  drop-if-exists: false
-  continue-on-error: true
-
-spring:
-  main:
-    banner-mode: off
-logging:
-  level:
-    root: OFF
-    com.tool: OFF
+snapshot:
+  offset-storage-path: snapshot-offsets
+  schema-history-path: snapshot-schema-history
+  batch-insert-size: 5000
+  snapshot-fetch-size: 2000
+  max-queue-size: 8192
+  poll-interval-ms: 500
+  offset-commit-interval-ms: 10000

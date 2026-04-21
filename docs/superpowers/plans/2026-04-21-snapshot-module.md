@@ -4,9 +4,11 @@
 
 **Goal:** Add a `snapshot` command that uses Debezium Embedded Engine 3.5.0.Final to stream full data from SQL Server directly into TiDB, recording LSN for future CDC.
 
-**Architecture:** Sequential per-database Debezium engine instances, each using `AsyncEmbeddedEngine` with `snapshot.mode=initial_only`. A custom `ChangeConsumer<SourceRecord>` routes snapshot events through a `SinkRecordConverter` (Kafka Connect Schema → JDBC) into a `TiDBBatchWriter` (multi-value INSERT). CDC prerequisites are checked by `CdcPreChecker` before engine startup.
+**Architecture:** Sequential per-database Debezium engine instances, each using `AsyncEmbeddedEngine` with `snapshot.mode=initial_only` and `Json` serialization format. `DebeziumEngine.create(Json.class)` yields `ChangeEvent<String, String>`. A plain-POJO `SnapshotSink` accumulates JSON batches, parses them via `SnapshotJsonParser` (Jackson), and routes `Map<String, Object>` rows to `TiDBBatchWriter` (multi-value INSERT). CDC prerequisites are checked by `CdcPreChecker` before engine startup.
 
-**Tech Stack:** Java 17, Spring Boot 3.2.5, Debezium 3.5.0.Final (embedded + SQL Server connector), Kafka Connect API (transitive), picocli 4.7.5, JUnit 5, Mockito
+**Tech Stack:** Java 17, Spring Boot 3.2.5, Debezium 3.5.0.Final (embedded + SQL Server connector), Jackson Databind (transitive from Debezium), picocli 4.7.5, JUnit 5, Mockito
+
+**API verification:** Task 0 probe test confirmed the actual Debezium 3.5 API. Key findings: `DebeziumEngine.create(Json.class)`, `ChangeEvent<String,String>.value()` is JSON String (not SourceRecord), `RecordCommitter` is inner interface `DebeziumEngine$RecordCommitter`, no `engine.await()` — use `engine.run()` via executor.
 
 **Design spec:** `docs/superpowers/specs/2026-04-21-snapshot-module-design.md`
 
@@ -23,9 +25,10 @@
 | `model/SnapshotDbResult.java` | Per-DB result with LSN |
 | `cdc/CdcPreChecker.java` | CDC prerequisite validation + auto-enable |
 | `engine/DebeziumEngineFactory.java` | Builds AsyncEmbeddedEngine per DB |
-| `sink/SinkRecordConverter.java` | Kafka Connect Schema → JDBC PreparedStatement mapping |
+| `sink/SnapshotJsonParser.java` | Jackson JSON parser for Debezium envelopes |
+| `sink/SinkRecordConverter.java` | Map<String,Object> → JDBC PreparedStatement mapping |
 | `sink/TiDBBatchWriter.java` | Multi-value INSERT buffering to TiDB |
-| `sink/SnapshotSink.java` | ChangeConsumer impl, routes events to TiDBBatchWriter |
+| `sink/SnapshotSink.java` | Plain POJO, parses JSON events and routes to TiDBBatchWriter |
 | `SnapshotStep.java` | MigrationStep orchestrator |
 
 ### New files (CLI)
@@ -42,9 +45,10 @@
 | `model/SnapshotTableResultTest.java` | Record behavior |
 | `model/SnapshotDbResultTest.java` | Record behavior |
 | `cdc/CdcPreCheckerTest.java` | CDC checks and auto-enable |
-| `sink/SinkRecordConverterTest.java` | Connect type → JDBC mapping |
+| `sink/SnapshotJsonParserTest.java` | JSON envelope parsing |
+| `sink/SinkRecordConverterTest.java` | Map<String,Object> → JDBC mapping |
 | `sink/TiDBBatchWriterTest.java` | Buffering and flush logic |
-| `sink/SnapshotSinkTest.java` | ChangeConsumer routing |
+| `sink/SnapshotSinkTest.java` | JSON parsing and routing |
 | `SnapshotStepTest.java` | Orchestration integration (mocked engine) |
 
 ### Modified files
@@ -1019,6 +1023,8 @@ git commit -m "feat(snapshot): add CdcPreChecker for CDC prerequisite validation
 - Create: `src/main/java/com/tool/snapshot/sink/SinkRecordConverter.java`
 - Create: `src/test/java/com/tool/snapshot/sink/SinkRecordConverterTest.java`
 
+**Design:** Maps `Map<String, Object>` (Jackson-parsed JSON values) to JDBC `PreparedStatement` methods. No Kafka Connect Schema/Struct dependency.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `src/test/java/com/tool/snapshot/sink/SinkRecordConverterTest.java`:
@@ -1026,17 +1032,13 @@ Create `src/test/java/com/tool/snapshot/sink/SinkRecordConverterTest.java`:
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.SchemaBuilder;
-import org.apache.kafka.connect.data.Struct;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.sql.PreparedStatement;
-import java.sql.Timestamp;
+import java.sql.SQLException;
 import java.sql.Types;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -1053,120 +1055,82 @@ class SinkRecordConverterTest {
     }
 
     @Test
-    void int32_setInt() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("age", Schema.INT32_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("age", 25);
-
+    void integer_setInt() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("age"));
+        converter.bind(ps, "age", 25);
         verify(ps).setInt(1, 25);
     }
 
     @Test
-    void int64_setLong() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("id", Schema.INT64_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("id", 9999999999L);
-
+    void long_setLong() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("id"));
+        converter.bind(ps, "id", 9999999999L);
         verify(ps).setLong(1, 9999999999L);
     }
 
     @Test
-    void float64_setDouble() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("price", Schema.FLOAT64_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("price", 19.99);
-
+    void double_setDouble() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("price"));
+        converter.bind(ps, "price", 19.99);
         verify(ps).setDouble(1, 19.99);
     }
 
     @Test
-    void string_setString() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("name", Schema.STRING_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("name", "Alice");
-
+    string_setString() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("name"));
+        converter.bind(ps, "name", "Alice");
         verify(ps).setString(1, "Alice");
     }
 
     @Test
-    void boolean_setBoolean() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("active", Schema.BOOLEAN_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("active", true);
-
+    void boolean_setBoolean() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("active"));
+        converter.bind(ps, "active", true);
         verify(ps).setBoolean(1, true);
     }
 
     @Test
-    void decimal_setBigDecimal() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("amount", SchemaBuilder.decimal(2).build())
-                .build();
-        Struct struct = new Struct(schema).put("amount", new BigDecimal("99.99"));
-
+    void bigDecimal_setBigDecimal() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("amount"));
+        converter.bind(ps, "amount", new BigDecimal("99.99"));
         verify(ps).setBigDecimal(1, new BigDecimal("99.99"));
     }
 
     @Test
-    void multipleFields_correctIndex() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("id", Schema.INT32_SCHEMA)
-                .field("name", Schema.STRING_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("id", 1).put("name", "Bob");
-
+    void multipleFields_correctIndex() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("id", "name"));
+        Map<String, Object> row = Map.of("id", 1, "name", "Bob");
+        converter.bind(ps, row, List.of("id", "name"));
         verify(ps).setInt(1, 1);
         verify(ps).setString(2, "Bob");
     }
 
     @Test
-    void nullValue_setNull() throws Exception {
-        Schema schema = SchemaBuilder.struct()
-                .field("name", Schema.OPTIONAL_STRING_SCHEMA)
-                .build();
-        Struct struct = new Struct(schema).put("name", null);
-
+    nullValue_setNull() throws SQLException {
         PreparedStatement ps = mock(PreparedStatement.class);
-        converter.bind(ps, struct, List.of("name"));
+        converter.bind(ps, "name", null);
         verify(ps).setNull(1, Types.VARCHAR);
     }
 
     @Test
-    void unsupportedType_throws() {
-        Schema schema = SchemaBuilder.struct()
-                .field("data", SchemaBuilder.bytes().build())
-                .build();
-        Struct struct = new Struct(schema).put("data", new byte[]{1, 2, 3});
+    byteArray_setBytes() throws SQLException {
+        PreparedStatement ps = mock(PreparedStatement.class);
+        converter.bind(ps, "data", new byte[]{1, 2, 3});
+        verify(ps).setBytes(1, new byte[]{1, 2, 3});
+    }
 
+    @Test
+    unsupportedType_throws() {
         PreparedStatement ps = mock(PreparedStatement.class);
         assertThrows(IllegalArgumentException.class,
-                () -> converter.bind(ps, struct, List.of("data")));
+                () -> converter.bind(ps, "bad", new Object()));
     }
 }
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SinkRecordConverterTest -q 2>&1 | tail -5`
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SinkRecordConverterTest -q -Djacoco.skip=true 2>&1 | tail -5`
 Expected: FAIL — class not found
 
 - [ ] **Step 3: Write SinkRecordConverter implementation**
@@ -1176,9 +1140,6 @@ Create `src/main/java/com/tool/snapshot/sink/SinkRecordConverter.java`:
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Field;
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.Struct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1186,93 +1147,76 @@ import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Maps Jackson-parsed Map<String, Object> values to JDBC PreparedStatement parameters.
+ * No Kafka Connect Schema/Struct dependency — Debezium Json format + Jackson
+ * handles all type resolution.
+ */
 public class SinkRecordConverter {
 
     private static final Logger log = LoggerFactory.getLogger(SinkRecordConverter.class);
 
     /**
-     * Bind all fields from a Debezium Struct to a PreparedStatement.
-     * Fields are bound in the order of `fieldNames` (1-indexed).
+     * Bind a single value to PreparedStatement at parameter index 1.
      */
-    public void bind(PreparedStatement ps, Struct value, List<String> fieldNames) throws SQLException {
-        Schema schema = value.schema();
-        for (int i = 0; i < fieldNames.size(); i++) {
-            String name = fieldNames.get(i);
-            Field field = schema.field(name);
-            if (field == null) {
-                ps.setNull(i + 1, Types.VARCHAR);
-                continue;
-            }
-            Object val = value.get(name);
-            if (val == null) {
-                ps.setNull(i + 1, jdbcTypeFor(field.schema()));
-                continue;
-            }
-            bindValue(ps, i + 1, val, field.schema());
-        }
+    public void bind(PreparedStatement ps, String fieldName, Object value) throws SQLException {
+        bindAt(ps, 1, value);
     }
 
     /**
-     * Extract field names from a Struct schema in definition order.
+     * Bind all entries from a row Map to PreparedStatement.
+     * Fields are bound in the order of `fieldNames` (1-indexed).
      */
-    public List<String> fieldNames(Struct value) {
-        return value.schema().fields().stream()
-                .map(Field::name)
-                .toList();
-    }
-
-    private void bindValue(PreparedStatement ps, int idx, Object val, Schema schema) throws SQLException {
-        switch (schema.type()) {
-            case INT8, INT16, INT32 -> ps.setInt(idx, ((Number) val).intValue());
-            case INT64 -> ps.setLong(idx, (Long) val);
-            case FLOAT32, FLOAT64 -> ps.setDouble(idx, ((Number) val).doubleValue());
-            case BOOLEAN -> ps.setBoolean(idx, (Boolean) val);
-            case STRING -> ps.setString(idx, val.toString());
-            case BYTES -> {
-                if (schema.name() != null && schema.name().startsWith("org.apache.kafka.connect.data.Decimal")) {
-                    ps.setBigDecimal(idx, (BigDecimal) val);
-                } else if (schema.name() != null && schema.name().startsWith("io.debezium.time.Micro")) {
-                    // MicroTimestamp / MicroTime -> Timestamp
-                    long micros = ((Number) val).longValue();
-                    ps.setTimestamp(idx, new java.sql.Timestamp(micros / 1000));
-                } else {
-                    ps.setBytes(idx, (byte[]) val);
-                }
-            }
-            default -> throw new IllegalArgumentException("Unsupported Connect type: " + schema.type() + " (name=" + schema.name() + ")");
+    public void bind(PreparedStatement ps, Map<String, Object> row, List<String> fieldNames) throws SQLException {
+        for (int i = 0; i < fieldNames.size(); i++) {
+            Object val = row.get(fieldNames.get(i));
+            bindAt(ps, i + 1, val);
         }
     }
 
-    private int jdbcTypeFor(Schema schema) {
-        if (schema.name() != null && schema.name().startsWith("org.apache.kafka.connect.data.Decimal")) {
-            return Types.DECIMAL;
+    private void bindAt(PreparedStatement ps, int idx, Object val) throws SQLException {
+        if (val == null) {
+            ps.setNull(idx, Types.VARCHAR);
+            return;
         }
-        return switch (schema.type()) {
-            case INT8, INT16, INT32 -> Types.INTEGER;
-            case INT64 -> Types.BIGINT;
-            case FLOAT32, FLOAT64 -> Types.DOUBLE;
-            case BOOLEAN -> Types.BOOLEAN;
-            case STRING -> Types.VARCHAR;
-            case BYTES -> Types.BINARY;
-            default -> Types.VARCHAR;
-        };
+        if (val instanceof Integer) {
+            ps.setInt(idx, (Integer) val);
+        } else if (val instanceof Long) {
+            ps.setLong(idx, (Long) val);
+        } else if (val instanceof Double) {
+            ps.setDouble(idx, (Double) val);
+        } else if (val instanceof Float) {
+            ps.setDouble(idx, ((Float) val).doubleValue());
+        } else if (val instanceof BigDecimal) {
+            ps.setBigDecimal(idx, (BigDecimal) val);
+        } else if (val instanceof Boolean) {
+            ps.setBoolean(idx, (Boolean) val);
+        } else if (val instanceof byte[]) {
+            ps.setBytes(idx, (byte[]) val);
+        } else if (val instanceof String) {
+            // Heuristic: try parsing as timestamp, fallback to string
+            ps.setString(idx, val.toString());
+        } else {
+            ps.setString(idx, val.toString());
+        }
     }
 }
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SinkRecordConverterTest -q`
-Expected: Tests run: 9, Failures: 0
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SinkRecordConverterTest -q -Djacoco.skip=true`
+Expected: Tests run: 10, Failures: 0
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/tool/snapshot/sink/SinkRecordConverter.java src/test/java/com/tool/snapshot/sink/SinkRecordConverterTest.java
-git commit -m "feat(snapshot): add SinkRecordConverter for Connect Schema to JDBC mapping"
+git commit -m "feat(snapshot): add SinkRecordConverter for Map to JDBC binding"
 ```
 
 ---
@@ -1283,6 +1227,8 @@ git commit -m "feat(snapshot): add SinkRecordConverter for Connect Schema to JDB
 - Create: `src/main/java/com/tool/snapshot/sink/TiDBBatchWriter.java`
 - Create: `src/test/java/com/tool/snapshot/sink/TiDBBatchWriterTest.java`
 
+**Design:** Buffers `Map<String, Object>` rows (Jackson-parsed from Debezium JSON) per table, flushes via multi-value INSERT to TiDB. No Kafka Connect dependency.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `src/test/java/com/tool/snapshot/sink/TiDBBatchWriterTest.java`:
@@ -1290,17 +1236,12 @@ Create `src/test/java/com/tool/snapshot/sink/TiDBBatchWriterTest.java`:
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.SchemaBuilder;
-import org.apache.kafka.connect.data.Struct;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -1326,58 +1267,54 @@ class TiDBBatchWriterTest {
         writer = new TiDBBatchWriter(dataSource, new SinkRecordConverter(), 3);
     }
 
-    private Struct makeRow(int id, String name) {
-        Schema schema = SchemaBuilder.struct()
-                .field("id", Schema.INT32_SCHEMA)
-                .field("name", Schema.STRING_SCHEMA)
-                .build();
-        return new Struct(schema).put("id", id).put("name", name);
+    private Map<String, Object> makeRow(int id, String name) {
+        return Map.of("id", id, "name", name);
     }
 
     @Test
     void accumulate_belowThreshold_noFlush() {
-        Struct row = makeRow(1, "Alice");
-        writer.accumulate("testdb", "dbo.users", row);
+        writer.accumulate("testdb", "users", makeRow(1, "Alice"));
         verifyNoInteractions(ps);
     }
 
     @Test
     void accumulate_atThreshold_flushes() throws Exception {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
-        writer.accumulate("testdb", "dbo.users", makeRow(2, "B"));
-        writer.accumulate("testdb", "dbo.users", makeRow(3, "C"));
-        verify(ps).addBatch();
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(2, "B"));
+        writer.accumulate("testdb", "users", makeRow(3, "C"));
+        verify(ps, times(3)).addBatch();
         verify(ps).executeBatch();
     }
 
     @Test
     void flushAll_flushesRemaining() throws Exception {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
         writer.flushAll();
+        verify(ps).addBatch();
         verify(ps).executeBatch();
     }
 
     @Test
     void totalRows_tracksCorrectly() {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
-        writer.accumulate("testdb", "dbo.users", makeRow(2, "B"));
-        writer.accumulate("testdb", "dbo.orders", makeRow(3, "C"));
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(2, "B"));
+        writer.accumulate("testdb", "orders", makeRow(3, "C"));
         assertEquals(3, writer.getTotalRows());
     }
 
     @Test
     void tableRows_tracksPerTable() {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
-        writer.accumulate("testdb", "dbo.users", makeRow(2, "B"));
-        writer.accumulate("testdb", "dbo.orders", makeRow(3, "C"));
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(2, "B"));
+        writer.accumulate("testdb", "orders", makeRow(3, "C"));
         Map<String, Long> tableRows = writer.getTableRows();
-        assertEquals(2L, tableRows.get("dbo.users"));
-        assertEquals(1L, tableRows.get("dbo.orders"));
+        assertEquals(2L, tableRows.get("users"));
+        assertEquals(1L, tableRows.get("orders"));
     }
 
     @Test
     void flushAll_resetsBuffers() throws Exception {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
         writer.flushAll();
         assertEquals(0, writer.getTotalRows());
         assertTrue(writer.getTableRows().isEmpty());
@@ -1385,12 +1322,13 @@ class TiDBBatchWriterTest {
 
     @Test
     void accumulate_afterFlush_reusesConnection() throws Exception {
-        writer.accumulate("testdb", "dbo.users", makeRow(1, "A"));
-        writer.accumulate("testdb", "dbo.users", makeRow(2, "B"));
-        writer.accumulate("testdb", "dbo.users", makeRow(3, "C"));
-        writer.accumulate("testdb", "dbo.users", makeRow(4, "D"));
-        writer.accumulate("testdb", "dbo.users", makeRow(5, "E"));
-        writer.accumulate("testdb", "dbo.users", makeRow(6, "F"));
+        writer.accumulate("testdb", "users", makeRow(1, "A"));
+        writer.accumulate("testdb", "users", makeRow(2, "B"));
+        writer.accumulate("testdb", "users", makeRow(3, "C"));
+        writer.accumulate("testdb", "users", makeRow(4, "D"));
+        writer.accumulate("testdb", "users", makeRow(5, "E"));
+        writer.accumulate("testdb", "users", makeRow(6, "F"));
+        verify(ps, times(6)).addBatch();
         verify(ps, times(2)).executeBatch();
     }
 }
@@ -1398,7 +1336,7 @@ class TiDBBatchWriterTest {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.TiDBBatchWriterTest -q 2>&1 | tail -5`
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.TiDBBatchWriterTest -q -Djacoco.skip=true 2>&1 | tail -5`
 Expected: FAIL — class not found
 
 - [ ] **Step 3: Write TiDBBatchWriter implementation**
@@ -1408,7 +1346,6 @@ Create `src/main/java/com/tool/snapshot/sink/TiDBBatchWriter.java`:
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Struct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1418,6 +1355,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -1429,11 +1367,8 @@ public class TiDBBatchWriter {
     private final SinkRecordConverter converter;
     private final int batchSize;
 
-    // Key: table name, Value: buffered rows
-    private final Map<String, List<Struct>> buffer = new HashMap<>();
-    // Key: table name, Value: field names in definition order
+    private final Map<String, List<Map<String, Object>>> buffer = new HashMap<>();
     private final Map<String, List<String>> fieldOrders = new HashMap<>();
-    // Key: table name, Value: dbName (tracked from first accumulate call)
     private final Map<String, String> tableDbNames = new HashMap<>();
     private long totalRows = 0L;
     private final Map<String, Long> tableRowCounts = new HashMap<>();
@@ -1444,11 +1379,11 @@ public class TiDBBatchWriter {
         this.batchSize = batchSize;
     }
 
-    public void accumulate(String dbName, String table, Struct after) {
+    public void accumulate(String dbName, String table, Map<String, Object> after) {
         tableDbNames.putIfAbsent(table, dbName);
         buffer.computeIfAbsent(table, k -> new ArrayList<>()).add(after);
         if (!fieldOrders.containsKey(table)) {
-            fieldOrders.put(table, converter.fieldNames(after));
+            fieldOrders.put(table, new ArrayList<>(new LinkedHashMap<>(after).keySet()));
         }
         totalRows++;
         tableRowCounts.merge(table, 1L, Long::sum);
@@ -1473,7 +1408,7 @@ public class TiDBBatchWriter {
     }
 
     private void flushTable(String table) throws SQLException {
-        List<Struct> rows = buffer.get(table);
+        List<Map<String, Object>> rows = buffer.get(table);
         if (rows == null || rows.isEmpty()) return;
 
         String dbName = tableDbNames.getOrDefault(table, "unknown");
@@ -1484,7 +1419,7 @@ public class TiDBBatchWriter {
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            for (Struct row : rows) {
+            for (Map<String, Object> row : rows) {
                 converter.bind(ps, row, fields);
                 ps.addBatch();
             }
@@ -1502,42 +1437,137 @@ public class TiDBBatchWriter {
 
 - [ ] **Step 4: Run tests**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.TiDBBatchWriterTest -q`
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.TiDBBatchWriterTest -q -Djacoco.skip=true`
 Expected: Tests run: 7, Failures: 0
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/tool/snapshot/sink/TiDBBatchWriter.java src/test/java/com/tool/snapshot/sink/TiDBBatchWriterTest.java
-git commit -m "feat(snapshot): add TiDBBatchWriter with multi-value INSERT buffering"
+git commit -m "feat(snapshot): add TiDBBatchWriter with Map-based multi-value INSERT"
 ```
 
 ---
 
-### Task 8: SnapshotSink
+### Task 8: SnapshotJsonParser + SnapshotSink
 
 **Files:**
+- Create: `src/main/java/com/tool/snapshot/sink/SnapshotJsonParser.java`
+- Create: `src/test/java/com/tool/snapshot/sink/SnapshotJsonParserTest.java`
 - Create: `src/main/java/com/tool/snapshot/sink/SnapshotSink.java`
 - Create: `src/test/java/com/tool/snapshot/sink/SnapshotSinkTest.java`
 
-**API note:** SnapshotSink is a plain POJO, NOT a `ChangeConsumer` implementation. The Debezium engine's `.notifying()` callback in DebeziumEngineFactory will adapt Debezium's `ChangeEvent` to `SourceRecord` and call `SnapshotSink.accept()`. This avoids coupling SnapshotSink to the unstable Debezium engine API.
+**Design:** SnapshotJsonParser wraps Jackson `ObjectMapper` to parse Debezium JSON event envelopes. SnapshotSink is a plain POJO that accepts `List<ChangeEvent<String, String>>` from Debezium's `.notifying()` callback, parses JSON via SnapshotJsonParser, and routes `Map<String, Object>` rows to TiDBBatchWriter.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write SnapshotJsonParser test**
+
+Create `src/test/java/com/tool/snapshot/sink/SnapshotJsonParserTest.java`:
+
+```java
+package com.tool.snapshot.sink;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class SnapshotJsonParserTest {
+
+    private final SnapshotJsonParser parser = new SnapshotJsonParser();
+
+    @Test
+    void parse_snapshotRecord_extractsAllFields() {
+        String json = """
+        {
+            "schema": {...},
+            "payload": {
+                "before": null,
+                "after": {"id": 1, "name": "Alice", "age": 30},
+                "source": {
+                    "version": "3.5.0.Final",
+                    "connector": "sqlserver",
+                    "name": "any2tidb_testdb",
+                    "db": "testdb",
+                    "schema": "dbo",
+                    "table": "users",
+                    "commit_lsn": "00000025:00000338:0003",
+                    "change_lsn": "00000025:00000338:0002",
+                    "snapshot": "true"
+                },
+                "op": "r",
+                "ts_ms": 1714000000000
+            }
+        }
+        """;
+
+        SnapshotJsonParser.ParsedRecord r = parser.parse(json);
+        assertEquals("testdb", r.dbName());
+        assertEquals("dbo", r.schema());
+        assertEquals("users", r.table());
+        assertEquals(Map.of("id", 1, "name", "Alice", "age", 30), r.after());
+        assertEquals("00000025:00000338:0003", r.commitLsn());
+        assertEquals("00000025:00000338:0002", r.changeLsn());
+        assertTrue(r.isSnapshot());
+    }
+
+    @Test
+    void parse_nonSnapshotRecord_isNotSnapshot() {
+        String json = """
+        {
+            "payload": {
+                "source": {"snapshot": "false"},
+                "op": "c"
+            }
+        }
+        """;
+        SnapshotJsonParser.ParsedRecord r = parser.parse(json);
+        assertFalse(r.isSnapshot());
+    }
+
+    @Test
+    void parse_lastSnapshot_isSnapshot() {
+        String json = """
+        {
+            "payload": {
+                "source": {"snapshot": "last"},
+                "op": "r"
+            }
+        }
+        """;
+        SnapshotJsonParser.ParsedRecord r = parser.parse(json);
+        assertTrue(r.isSnapshot());
+    }
+
+    @Test
+    void parse_nullAfter_afterIsNull() {
+        String json = """
+        {
+            "payload": {
+                "after": null,
+                "source": {"snapshot": "true"},
+                "op": "d"
+            }
+        }
+        """;
+        SnapshotJsonParser.ParsedRecord r = parser.parse(json);
+        assertNull(r.after());
+    }
+}
+```
+
+- [ ] **Step 2: Write SnapshotSink test**
 
 Create `src/test/java/com/tool/snapshot/sink/SnapshotSinkTest.java`:
 
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Schema;
-import org.apache.kafka.connect.data.SchemaBuilder;
-import org.apache.kafka.connect.data.Struct;
-import org.apache.kafka.connect.source.SourceRecord;
+import io.debezium.engine.ChangeEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -1554,110 +1584,69 @@ class SnapshotSinkTest {
         sink = new SnapshotSink(batchWriter);
     }
 
-    private SourceRecord makeSnapshotRecord(String topic, String table, Map<String, ?> afterValues) {
-        Schema keySchema = SchemaBuilder.struct()
-                .field("id", Schema.INT32_SCHEMA)
-                .build();
-
-        Schema valueSchema = SchemaBuilder.struct()
-                .name("Envelope")
-                .field("before", Schema.OPTIONAL_STRING_SCHEMA)
-                .field("after", SchemaBuilder.struct()
-                        .field("id", Schema.INT32_SCHEMA)
-                        .field("name", Schema.STRING_SCHEMA)
-                        .optional()
-                        .build())
-                .field("op", Schema.STRING_SCHEMA)
-                .field("ts_ms", Schema.OPTIONAL_INT64_SCHEMA)
-                .field("source", SchemaBuilder.struct()
-                        .field("commit_lsn", Schema.OPTIONAL_STRING_SCHEMA)
-                        .field("change_lsn", Schema.OPTIONAL_STRING_SCHEMA)
-                        .field("snapshot", Schema.OPTIONAL_STRING_SCHEMA)
-                        .build())
-                .build();
-
-        Struct afterStruct = new Struct(valueSchema.field("after").schema());
-        afterValues.forEach((k, v) -> afterStruct.put(k, v));
-
-        Struct sourceStruct = new Struct(valueSchema.field("source").schema())
-                .put("commit_lsn", "00000025:00000338:0003")
-                .put("change_lsn", "00000025:00000338:0002")
-                .put("snapshot", "true");
-
-        Struct value = new Struct(valueSchema)
-                .put("before", null)
-                .put("after", afterStruct)
-                .put("op", "r")
-                .put("source", sourceStruct);
-
-        return new SourceRecord(
-                Map.of("connector", "sqlserver"),
-                Map.of("partition", 0),
-                topic, Schema.STRING_SCHEMA, "dbo." + table,
-                valueSchema, value);
+    private String makeSnapshotJson(String dbName, String table, String afterJson) {
+        return """
+        {
+            "payload": {
+                "before": null,
+                "after": %s,
+                "source": {
+                    "db": "%s",
+                    "schema": "dbo",
+                    "table": "%s",
+                    "commit_lsn": "00000025:00000338:0003",
+                    "change_lsn": "00000025:00000338:0002",
+                    "snapshot": "true"
+                },
+                "op": "r"
+            }
+        }
+        """.formatted(afterJson, dbName, table);
     }
 
     @Test
     void snapshotRecord_withAfterData_isRoutedToWriter() {
-        SourceRecord record = makeSnapshotRecord("any2tidb_testdb.dbo.users",
-                "users", Map.of("id", 1, "name", "Alice"));
+        String json = makeSnapshotJson("testdb", "users", "{\"id\": 1, \"name\": \"Alice\"}");
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", json);
 
-        sink.accept(List.of(record));
+        sink.accept(List.of(event));
 
-        verify(batchWriter).accumulate(eq("testdb"), eq("users"), any(Struct.class));
+        verify(batchWriter).accumulate(eq("testdb"), eq("users"), any(Map.class));
     }
 
     @Test
     void snapshotRecord_nullAfter_isSkipped() {
-        Schema valueSchema = SchemaBuilder.struct()
-                .field("after", Schema.OPTIONAL_STRING_SCHEMA)
-                .field("op", Schema.STRING_SCHEMA)
-                .field("source", SchemaBuilder.struct()
-                        .field("snapshot", Schema.OPTIONAL_STRING_SCHEMA)
-                        .build())
-                .build();
-        Struct value = new Struct(valueSchema)
-                .put("after", null)
-                .put("op", "r")
-                .put("source", new Struct(valueSchema.field("source").schema()).put("snapshot", "true"));
+        String json = makeSnapshotJson("testdb", "users", "null");
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", json);
 
-        SourceRecord record = new SourceRecord(
-                Map.of(), Map.of("partition", 0),
-                "topic", Schema.STRING_SCHEMA, "key",
-                valueSchema, value);
-
-        sink.accept(List.of(record));
+        sink.accept(List.of(event));
 
         verify(batchWriter, never()).accumulate(anyString(), anyString(), any());
     }
 
     @Test
     void nonSnapshotRecord_isSkipped() {
-        Schema valueSchema = SchemaBuilder.struct()
-                .field("op", Schema.STRING_SCHEMA)
-                .field("source", SchemaBuilder.struct()
-                        .field("snapshot", Schema.OPTIONAL_STRING_SCHEMA)
-                        .build())
-                .build();
-        Struct value = new Struct(valueSchema)
-                .put("op", "c")
-                .put("source", new Struct(valueSchema.field("source").schema()).put("snapshot", "false"));
+        String json = """
+        {
+            "payload": {
+                "source": {"snapshot": "false"},
+                "op": "c"
+            }
+        }
+        """;
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", json);
 
-        SourceRecord record = new SourceRecord(
-                Map.of(), Map.of(), "topic", null, null,
-                valueSchema, value);
-
-        sink.accept(List.of(record));
+        sink.accept(List.of(event));
 
         verify(batchWriter, never()).accumulate(anyString(), anyString(), any());
     }
 
     @Test
     void lsnExtracted_fromSnapshotRecord() {
-        SourceRecord record = makeSnapshotRecord("any2tidb_testdb.dbo.users",
-                "users", Map.of("id", 1, "name", "Alice"));
+        String json = makeSnapshotJson("testdb", "users", "{\"id\": 1}");
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", json);
 
-        sink.accept(List.of(record));
+        sink.accept(List.of(event));
 
         assertEquals("00000025:00000338:0003", sink.getCommitLsn());
         assertEquals("00000025:00000338:0002", sink.getChangeLsn());
@@ -1665,10 +1654,10 @@ class SnapshotSinkTest {
 
     @Test
     void reset_clearsLsn() {
-        SourceRecord record = makeSnapshotRecord("any2tidb_testdb.dbo.users",
-                "users", Map.of("id", 1, "name", "Alice"));
+        String json = makeSnapshotJson("testdb", "users", "{\"id\": 1}");
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", json);
 
-        sink.accept(List.of(record));
+        sink.accept(List.of(event));
         sink.reset();
 
         assertNull(sink.getCommitLsn());
@@ -1677,45 +1666,92 @@ class SnapshotSinkTest {
 
     @Test
     void recordConversionError_loggedAndSkipped() {
-        // Record with null value — should log error and skip, not throw
-        SourceRecord record = new SourceRecord(
-                Map.of(), Map.of(), "topic", null, null, null, null);
+        ChangeEvent<String, String> event = new ChangeEvent<>("key", "not valid json");
 
-        assertDoesNotThrow(() -> sink.accept(List.of(record)));
+        assertDoesNotThrow(() -> sink.accept(List.of(event)));
         verify(batchWriter, never()).accumulate(anyString(), anyString(), any());
     }
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SnapshotSinkTest -q 2>&1 | tail -5`
-Expected: FAIL — class not found
+Run: `mvn test -pl . -Dtest="com.tool.snapshot.sink.SnapshotJsonParserTest,com.tool.snapshot.sink.SnapshotSinkTest" -q -Djacoco.skip=true 2>&1 | tail -5`
+Expected: FAIL — classes not found
 
-- [ ] **Step 3: Write SnapshotSink implementation**
+- [ ] **Step 4: Write SnapshotJsonParser implementation**
+
+Create `src/main/java/com/tool/snapshot/sink/SnapshotJsonParser.java`:
+
+```java
+package com.tool.snapshot.sink;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+public class SnapshotJsonParser {
+
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    public record ParsedRecord(
+            String dbName, String schema, String table,
+            Map<String, Object> before, Map<String, Object> after,
+            String op, String commitLsn, String changeLsn, String snapshot
+    ) {
+        public boolean isSnapshot() { return "true".equals(snapshot) || "last".equals(snapshot); }
+    }
+
+    public ParsedRecord parse(String json) {
+        JsonNode root = mapper.readTree(json);
+        JsonNode payload = root.has("payload") ? root.get("payload") : root;
+        JsonNode source = payload.get("source");
+
+        String dbName = source != null ? source.path("db").asText() : null;
+        String schema = source != null ? source.path("schema").asText() : null;
+        String table = source != null ? source.path("table").asText() : null;
+        String commitLsn = source != null ? source.path("commit_lsn").asText(null) : null;
+        String changeLsn = source != null ? source.path("change_lsn").asText(null) : null;
+        String snapshot = source != null ? source.path("snapshot").asText(null) : null;
+        String op = payload.path("op").asText(null);
+
+        Map<String, Object> after = toMap(payload.get("after"));
+        Map<String, Object> before = toMap(payload.get("before"));
+
+        return new ParsedRecord(dbName, schema, table, before, after,
+                op, commitLsn, changeLsn, snapshot);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> toMap(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        return mapper.convertValue(node, LinkedHashMap.class);
+    }
+}
+```
+
+- [ ] **Step 5: Write SnapshotSink implementation**
 
 Create `src/main/java/com/tool/snapshot/sink/SnapshotSink.java`:
 
 ```java
 package com.tool.snapshot.sink;
 
-import org.apache.kafka.connect.data.Struct;
-import org.apache.kafka.connect.source.SourceRecord;
+import io.debezium.engine.ChangeEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Map;
 
-/**
- * Processes Debezium SourceRecords: routes snapshot events to TiDBBatchWriter
- * and tracks LSN for metadata output. Plain POJO — NOT a ChangeConsumer.
- * The DebeziumEngineFactory adapts engine callbacks to call accept().
- */
 public class SnapshotSink {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotSink.class);
 
     private final TiDBBatchWriter batchWriter;
+    private final SnapshotJsonParser parser = new SnapshotJsonParser();
     private String commitLsn;
     private String changeLsn;
 
@@ -1723,54 +1759,25 @@ public class SnapshotSink {
         this.batchWriter = batchWriter;
     }
 
-    public void accept(List<SourceRecord> records) {
-        for (SourceRecord record : records) {
+    public void accept(List<ChangeEvent<String, String>> events) {
+        for (ChangeEvent<String, String> event : events) {
             try {
-                if (isSnapshotEvent(record)) {
-                    Struct value = (Struct) record.value();
-                    Struct after = value.getStruct("after");
-                    if (after != null) {
-                        String table = extractTableName(record);
-                        String dbName = extractDbName(record);
-                        batchWriter.accumulate(dbName, table, after);
-                    }
-                    trackLsn(record);
-                }
+                String json = event.value();
+                if (json == null) continue;
+                SnapshotJsonParser.ParsedRecord record = parser.parse(json);
+                if (!record.isSnapshot()) continue;
+                if (record.after() == null) continue;
+                batchWriter.accumulate(record.dbName(), record.table(), record.after());
+                trackLsn(record);
             } catch (Exception e) {
-                log.error("[\"record failed\"] [topic={}] [error=\"{}\"]", record.topic(), e.getMessage());
+                log.error("[\"record failed\"] [error=\"{}\"]", e.getMessage());
             }
         }
     }
 
-    public boolean isSnapshotEvent(SourceRecord record) {
-        if (record.value() == null || !(record.value() instanceof Struct value)) return false;
-        Struct source = value.getStruct("source");
-        if (source == null) return false;
-        String snapshot = source.getString("snapshot");
-        return "true".equals(snapshot) || "last".equals(snapshot);
-    }
-
-    private String extractTableName(SourceRecord record) {
-        String topic = record.topic();
-        int lastDot = topic.lastIndexOf('.');
-        return topic.substring(lastDot + 1);
-    }
-
-    private String extractDbName(SourceRecord record) {
-        String topic = record.topic();
-        int firstDot = topic.indexOf('.');
-        int serverPart = topic.indexOf('_', 0);
-        return topic.substring(serverPart + 1, firstDot);
-    }
-
-    private void trackLsn(SourceRecord record) {
-        Struct value = (Struct) record.value();
-        Struct source = value.getStruct("source");
-        if (source == null) return;
-        String cLsn = source.getString("commit_lsn");
-        String chLsn = source.getString("change_lsn");
-        if (cLsn != null) commitLsn = cLsn;
-        if (chLsn != null) changeLsn = chLsn;
+    private void trackLsn(SnapshotJsonParser.ParsedRecord record) {
+        if (record.commitLsn() != null) commitLsn = record.commitLsn();
+        if (record.changeLsn() != null) changeLsn = record.changeLsn();
     }
 
     public String getCommitLsn() { return commitLsn; }
@@ -1783,16 +1790,16 @@ public class SnapshotSink {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 6: Run tests to verify they pass**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.sink.SnapshotSinkTest -q`
-Expected: Tests run: 6, Failures: 0
+Run: `mvn test -pl . -Dtest="com.tool.snapshot.sink.SnapshotJsonParserTest,com.tool.snapshot.sink.SnapshotSinkTest" -q -Djacoco.skip=true`
+Expected: Tests run: 10, Failures: 0
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/main/java/com/tool/snapshot/sink/SnapshotSink.java src/test/java/com/tool/snapshot/sink/SnapshotSinkTest.java
-git commit -m "feat(snapshot): add SnapshotSink for ChangeConsumer event routing"
+git add src/main/java/com/tool/snapshot/sink/SnapshotJsonParser.java src/test/java/com/tool/snapshot/sink/SnapshotJsonParserTest.java src/main/java/com/tool/snapshot/sink/SnapshotSink.java src/test/java/com/tool/snapshot/sink/SnapshotSinkTest.java
+git commit -m "feat(snapshot): add SnapshotJsonParser and SnapshotSink for JSON event processing"
 ```
 
 ---
@@ -1802,7 +1809,7 @@ git commit -m "feat(snapshot): add SnapshotSink for ChangeConsumer event routing
 **Files:**
 - Create: `src/main/java/com/tool/snapshot/engine/DebeziumEngineFactory.java`
 
-**API note:** The exact `DebeziumEngine.create()` builder API depends on Debezium 3.5.0.Final internals. Task 0 probes the actual API. The implementation below uses the standard builder pattern. If compilation fails, adapt based on the Task 0 probe output. The key thing: the `.notifying()` callback receives `List<ChangeEvent>` and must adapt to `SourceRecord` before calling `SnapshotSink.accept()`.
+**API:** Uses verified Debezium 3.5 API: `DebeziumEngine.create(Json.class)` returns `Builder<ChangeEvent<String, String>>`. Uses `.notifying(Consumer<ChangeEvent<String, String>>)` for simple callback and `.using(CompletionCallback)` for error handling.
 
 - [ ] **Step 1: Write DebeziumEngineFactory**
 
@@ -1814,12 +1821,12 @@ package com.tool.snapshot.engine;
 import com.tool.config.AppConfig;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.snapshot.sink.SnapshotSink;
-import org.apache.kafka.connect.source.SourceRecord;
+import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
+import io.debezium.engine.format.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.Properties;
 
 public class DebeziumEngineFactory {
@@ -1832,11 +1839,12 @@ public class DebeziumEngineFactory {
         this.source = source;
     }
 
-    public DebeziumEngine<?> create(
+    public DebeziumEngine<ChangeEvent<String, String>> create(
             String dbName,
             SnapshotConfig snapshotConfig,
-            List<String> tableFilter,
-            SnapshotSink sink) {
+            java.util.List<String> tableFilter,
+            SnapshotSink sink,
+            Runnable onComplete) {
 
         Properties props = new Properties();
         props.setProperty("name", "any2tidb-snapshot-" + dbName);
@@ -1862,65 +1870,32 @@ public class DebeziumEngineFactory {
         log.info("[\"creating debezium engine\"] [database={}] [snapshotMode={}] [tables={}]",
                 dbName, snapshotConfig.snapshotMode(), snapshotConfig.buildTableIncludeList(tableFilter));
 
-        // Build engine with .notifying() callback that adapts ChangeEvent -> SourceRecord -> SnapshotSink
-        // The exact builder API is verified in Task 0 (DebeziumApiProbeTest).
-        // If DebeziumEngine.create() signature differs, adapt accordingly.
-        DebeziumEngine.Builder builder = DebeziumEngine.create(
-                io.debezium.engine.ChangeEvent.class, io.debezium.engine.ChangeEvent.class);
-
-        return builder.using(props)
-                .notifying((List<io.debezium.engine.ChangeEvent<SourceRecord, SourceRecord>> events,
-                           io.debezium.engine.RecordCommitter<io.debezium.engine.ChangeEvent<SourceRecord, SourceRecord>> committer) -> {
-                    List<SourceRecord> records = events.stream()
-                            .map(io.debezium.engine.ChangeEvent::value)
-                            .filter(v -> v != null)
-                            .toList();
-                    sink.accept(records);
-                    for (var event : events) {
-                        committer.markProcessed(event);
+        return DebeziumEngine.create(Json.class)
+                .using(props)
+                .notifying(sink::accept)
+                .using((DebeziumEngine.CompletionCallback) (success, message, error) -> {
+                    if (error != null) {
+                        log.error("[\"engine failed\"] [database={}] [error=\"{}\"]", dbName, error.getMessage());
+                    } else {
+                        log.info("[\"engine completed\"] [database={}] [message=\"{}\"]", dbName, message);
                     }
-                    committer.markBatchFinished();
+                    if (onComplete != null) onComplete.run();
                 })
                 .build();
     }
 }
 ```
 
-If the builder API above does not compile, the most common alternative patterns for Debezium 3.5 are:
-
-**Alternative A** (simpler Consumer):
-```java
-return DebeziumEngine.create(SourceRecord.class)
-        .using(props)
-        .notifying(record -> {
-            if (record != null) sink.accept(List.of(record));
-        })
-        .build();
-```
-
-**Alternative B** (with CompletionCallback):
-```java
-return DebeziumEngine.create(ChangeEvent.class, ChangeEvent.class)
-        .using(props)
-        .notifying(callback)
-        .using((DebeziumEngine.CompletionCallback) (success, message, error) -> {
-            if (error != null) log.error("Engine failed: {}", error.getMessage());
-        })
-        .build();
-```
-
-Choose the pattern that compiles against the Task 0 probe results.
-
 - [ ] **Step 2: Verify it compiles**
 
 Run: `mvn compile -q`
-Expected: BUILD SUCCESS. If not, fix the builder pattern per Task 0 results.
+Expected: BUILD SUCCESS
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add src/main/java/com/tool/snapshot/engine/DebeziumEngineFactory.java
-git commit -m "feat(snapshot): add DebeziumEngineFactory for per-DB engine creation"
+git commit -m "feat(snapshot): add DebeziumEngineFactory using Json format"
 ```
 
 ---
@@ -1931,6 +1906,8 @@ git commit -m "feat(snapshot): add DebeziumEngineFactory for per-DB engine creat
 - Create: `src/main/java/com/tool/snapshot/SnapshotStep.java`
 - Create: `src/test/java/com/tool/snapshot/SnapshotStepTest.java`
 
+**Design:** Implements MigrationStep. Flow: CDC pre-check → build Debezium engine per DB → run via executor + CountDownLatch → flush writer → collect results → write snapshot-meta.json.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `src/test/java/com/tool/snapshot/SnapshotStepTest.java`:
@@ -1940,9 +1917,6 @@ package com.tool.snapshot;
 
 import com.tool.config.AppConfig;
 import com.tool.pipeline.StepContext;
-import com.tool.pipeline.StepResult;
-import com.tool.snapshot.cdc.CdcPreChecker;
-import com.tool.snapshot.engine.DebeziumEngineFactory;
 import com.tool.snapshot.model.SnapshotDbResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1975,9 +1949,9 @@ class SnapshotStepTest {
 
     @Test
     void stepName_isSnapshot() {
-        // Minimal test: verify name is correct
-        // Full orchestration test requires integration test with real DB
-        assertTrue(true); // placeholder until engine is available for mocking
+        javax.sql.DataSource ds = mock(javax.sql.DataSource.class);
+        SnapshotStep step = new SnapshotStep(config, ds);
+        assertEquals("Snapshot", step.name());
     }
 
     @Test
@@ -1986,7 +1960,6 @@ class SnapshotStepTest {
         ctx.put("fetchSize", 5000);
         ctx.put("snapshotThreads", 4);
 
-        // Test that config reads from context correctly
         Integer batchSize = ctx.get("batchSize", Integer.class);
         Integer fetchSize = ctx.get("fetchSize", Integer.class);
         Integer threads = ctx.get("snapshotThreads", Integer.class);
@@ -2014,7 +1987,7 @@ class SnapshotStepTest {
 
 - [ ] **Step 2: Run tests to verify they compile**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.SnapshotStepTest -q`
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.SnapshotStepTest -q -Djacoco.skip=true`
 Expected: Tests run: 4, Failures: 0
 
 - [ ] **Step 3: Write SnapshotStep implementation**
@@ -2034,6 +2007,7 @@ import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
 import com.tool.snapshot.sink.SnapshotSink;
 import com.tool.snapshot.sink.TiDBBatchWriter;
+import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -2136,7 +2110,6 @@ public class SnapshotStep implements MigrationStep {
                                                CdcPreChecker cdcChecker,
                                                SnapshotConfig snapshotConfig,
                                                boolean autoEnable) {
-        long start = System.currentTimeMillis();
         try (Connection conn = DriverManager.getConnection(
                 config.getSource().sqlServerJdbcUrlForDB(dbName),
                 config.getSource().getUsername(),
@@ -2154,10 +2127,11 @@ public class SnapshotStep implements MigrationStep {
             SnapshotSink sink = new SnapshotSink(batchWriter);
 
             DebeziumEngineFactory factory = new DebeziumEngineFactory(config.getSource());
-            DebeziumEngine<?> engine = factory.create(dbName, snapshotConfig, tables, sink);
-
-            AtomicReference<Throwable> engineError = new AtomicReference<>();
             CountDownLatch done = new CountDownLatch(1);
+            AtomicReference<Throwable> engineError = new AtomicReference<>();
+
+            DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
+                    dbName, snapshotConfig, tables, sink, done::countDown);
 
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
@@ -2166,7 +2140,6 @@ public class SnapshotStep implements MigrationStep {
                         engine.run();
                     } catch (Throwable t) {
                         engineError.set(t);
-                    } finally {
                         done.countDown();
                     }
                 });
@@ -2271,20 +2244,14 @@ public class SnapshotStep implements MigrationStep {
 
 - [ ] **Step 4: Run tests**
 
-Run: `mvn test -pl . -Dtest=com.tool.snapshot.SnapshotStepTest -q`
+Run: `mvn test -pl . -Dtest=com.tool.snapshot.SnapshotStepTest -q -Djacoco.skip=true`
 Expected: Tests run: 4, Failures: 0
 
-- [ ] **Step 5: Fix compilation issues**
-
-The `DebeziumEngine` API in 3.5 may differ. Run `mvn compile` and fix type mismatches based on Task 0 probe results. Key areas:
-- `DebeziumEngine.create()` generic signatures
-- `engine.run()` vs `executor.execute(engine)` — Debezium Engine implements `Runnable`, so `engine.run()` is the correct way to execute it
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/main/java/com/tool/snapshot/SnapshotStep.java src/test/java/com/tool/snapshot/SnapshotStepTest.java
-git commit -m "feat(snapshot): add SnapshotStep orchestrator with CDC check and Debezium engine"
+git commit -m "feat(snapshot): add SnapshotStep orchestrator with Debezium engine"
 ```
 
 ---
