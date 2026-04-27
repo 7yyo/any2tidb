@@ -87,11 +87,15 @@ public class CdcPreChecker {
 
     public void enableCdcForTable(Connection conn, String dbName, String schema, String table) throws Exception {
         try (Statement stmt = conn.createStatement()) {
-            stmt.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + schema
-                    + "', @source_name = '" + table
+            stmt.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
+                    + "', @source_name = '" + escapeQuote(table)
                     + "', @role_name = NULL");
             log.info("[\"cdc enabled\"] [database={}] [table={}.{}]", dbName, schema, table);
         }
+    }
+
+    private static String escapeQuote(String s) {
+        return s.replace("'", "''");
     }
 
     public CdcCheckResult check(Connection conn, String dbName,

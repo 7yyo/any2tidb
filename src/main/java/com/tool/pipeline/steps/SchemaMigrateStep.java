@@ -67,7 +67,7 @@ public class SchemaMigrateStep implements MigrationStep {
             pw.println("-- any2tidb dry-run  db=" + dbName);
             pw.println("-- Source to TiDB directly: mysql -h host -P 4000 -u root < " + filename);
             pw.println();
-            pw.println("USE `" + dbName + "`;");
+            pw.println("USE `" + escapeBacktick(dbName) + "`;");
             pw.println();
             pw.print(ddlBlock);
         }
@@ -234,10 +234,14 @@ public class SchemaMigrateStep implements MigrationStep {
                 config.getTarget().getUsername(),
                 config.getTarget().getPassword());
         try (java.sql.Statement st = conn.createStatement()) {
-            st.execute("CREATE DATABASE IF NOT EXISTS `" + dbName + "`");
-            st.execute("USE `" + dbName + "`");
+            st.execute("CREATE DATABASE IF NOT EXISTS `" + escapeBacktick(dbName) + "`");
+            st.execute("USE `" + escapeBacktick(dbName) + "`");
         }
         conn.setCatalog(dbName);
         return conn;
+    }
+
+    private static String escapeBacktick(String s) {
+        return s.replace("`", "``");
     }
 }

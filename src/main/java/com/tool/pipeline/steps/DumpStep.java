@@ -99,7 +99,8 @@ public class DumpStep implements MigrationStep {
                 try { master.close(); } catch (Exception ignored) {}
             }
         } catch (Exception e) {
-            // master connection may fail in tests; use empty list
+            log.log("WARN", "Failed to list databases, no tables will be exported",
+                    "error", e.getMessage());
             dbNames = List.of();
         }
 
@@ -183,7 +184,6 @@ public class DumpStep implements MigrationStep {
         long start = System.currentTimeMillis();
         DumpWriter writer = writerFactory.get();
         long[] rowCount  = {0L};
-        int[]  fileCount = {0};
 
         try {
             Connection conn = connFactory.apply(dbName);
@@ -198,19 +198,18 @@ public class DumpStep implements MigrationStep {
                         batch -> {
                             writer.writeBatch(outputRoot, dbName, schema, table, columns, batch);
                             rowCount[0] += batch.rows().size();
-                            fileCount[0] = batch.batchIndex() + 1;
                         });
 
                 writer.close();
                 return new DumpTableResult(dbName, schema, table,
-                        rowCount[0], fileCount[0], System.currentTimeMillis() - start, null);
+                        rowCount[0], 0, System.currentTimeMillis() - start, null);
             } finally {
                 try { conn.close(); } catch (Exception ignored) {}
             }
         } catch (Exception e) {
             try { writer.close(); } catch (Exception ignored) {}
             return new DumpTableResult(dbName, schema, table,
-                    rowCount[0], fileCount[0], System.currentTimeMillis() - start, e.getMessage());
+                    rowCount[0], 0, System.currentTimeMillis() - start, e.getMessage());
         }
     }
 
@@ -227,7 +226,8 @@ public class DumpStep implements MigrationStep {
             }
         }
         try (Statement st = masterConn.createStatement()) {
-            st.execute("ALTER DATABASE [" + dbName + "] SET ALLOW_SNAPSHOT_ISOLATION ON");
+            st.execute("ALTER DATABASE [" + escapeBracket(dbName)
+                    + "] SET ALLOW_SNAPSHOT_ISOLATION ON");
         }
     }
 
@@ -242,7 +242,7 @@ public class DumpStep implements MigrationStep {
              ResultSet rs = st.executeQuery("SELECT sys.fn_cdc_get_max_lsn()")) {
             if (rs.next()) {
                 byte[] lsn = rs.getBytes(1);
-                if (lsn == null) return null;
+                if (lsn == null || lsn.length == 0) return null;
                 StringBuilder sb = new StringBuilder("0x");
                 for (byte b : lsn) sb.append(String.format("%02X", b));
                 return sb.toString();
@@ -261,14 +261,14 @@ public class DumpStep implements MigrationStep {
             StringBuilder lsnEntries = new StringBuilder();
             for (Map.Entry<String, String> e : startLsnByDb.entrySet()) {
                 if (lsnEntries.length() > 0) lsnEntries.append(",\n");
-                String val = e.getValue() != null ? "\"" + e.getValue() + "\"" : "null";
-                lsnEntries.append("    \"").append(e.getKey()).append("\": ").append(val);
+                String val = e.getValue() != null ? jsonEscape(e.getValue()) : "null";
+                lsnEntries.append("    ").append(jsonEscape(e.getKey())).append(": ").append(val);
             }
             String json = "{\n" +
-                "  \"startTime\": \"" + startTime + "\",\n" +
+                "  \"startTime\": " + jsonEscape(startTime) + ",\n" +
                 "  \"startLsnByDb\": {\n" + lsnEntries + "\n  },\n" +
                 "  \"databases\": [" + databases.stream()
-                    .map(d -> "\"" + d + "\"")
+                    .map(d -> jsonEscape(d))
                     .collect(java.util.stream.Collectors.joining(", ")) + "],\n" +
                 "  \"snapshotIsolation\": " + snapshotIsolation + "\n" +
                 "}\n";
@@ -289,5 +289,40 @@ public class DumpStep implements MigrationStep {
                 : configured;
         return Path.of(base, LocalDateTime.now().format(TS_FMT));
     }
-}
 
+    /**
+     * Escape a string for safe inclusion in a JSON string value.
+     * Handles: {@code "}, {@code \}, {@code \n}, {@code \r}, {@code \t}.
+     */
+    static String jsonEscape(String s) {
+        if (s == null) return "\"null\"";
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"'  -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default  -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        sb.append('"');
+        return sb.toString();
+    }
+
+    /**
+     * Escape {@code ]} as {@code ]]} inside SQL Server bracket-quoted identifiers.
+     */
+    private static String escapeBracket(String identifier) {
+        return identifier.replace("]", "]]");
+    }
+}

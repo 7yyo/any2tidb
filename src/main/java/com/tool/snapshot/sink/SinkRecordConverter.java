@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -32,6 +33,8 @@ public class SinkRecordConverter {
         }
         if (val instanceof Integer) {
             ps.setInt(idx, (Integer) val);
+        } else if (val instanceof Short) {
+            ps.setInt(idx, ((Short) val).intValue());
         } else if (val instanceof Long) {
             ps.setLong(idx, (Long) val);
         } else if (val instanceof Double) {
@@ -40,6 +43,8 @@ public class SinkRecordConverter {
             ps.setDouble(idx, ((Float) val).doubleValue());
         } else if (val instanceof BigDecimal) {
             ps.setBigDecimal(idx, (BigDecimal) val);
+        } else if (val instanceof BigInteger) {
+            ps.setBigDecimal(idx, new BigDecimal((BigInteger) val));
         } else if (val instanceof Boolean) {
             ps.setBoolean(idx, (Boolean) val);
         } else if (val instanceof byte[]) {

@@ -30,7 +30,7 @@ public class SqlServerDumpExtractor implements DumpExtractor {
                             int chunkSize, boolean useNolock,
                             RowBatchConsumer consumer) throws Exception {
         String hint = useNolock ? " WITH (NOLOCK)" : "";
-        String sql = "SELECT * FROM [" + schema + "].[" + table + "]" + hint;
+        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "]" + hint;
 
         try (PreparedStatement ps = conn.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
@@ -74,7 +74,7 @@ public class SqlServerDumpExtractor implements DumpExtractor {
     public List<String> getColumnNames(Connection conn, String schema, String table,
                                        boolean useNolock) throws Exception {
         String hint = useNolock ? " WITH (NOLOCK)" : "";
-        String sql = "SELECT * FROM [" + schema + "].[" + table + "]" + hint + " WHERE 1=0";
+        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "]" + hint + " WHERE 1=0";
         try (PreparedStatement ps = conn.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              ResultSet rs = ps.executeQuery()) {
@@ -101,8 +101,19 @@ public class SqlServerDumpExtractor implements DumpExtractor {
             ps.setString(1, schema);
             ps.setString(2, table);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? rs.getLong(1) : 0L;
+                if (!rs.next()) return 0L;
+                long count = rs.getLong(1);
+                return Math.max(0L, count);
             }
         }
+    }
+
+    /**
+     * Escape {@code ]} as {@code ]]} inside SQL Server bracket-quoted identifiers.
+     * Without this, a name containing {@code ]} would break out of the bracket
+     * quoting and allow SQL injection.
+     */
+    private static String escapeBracket(String identifier) {
+        return identifier.replace("]", "]]");
     }
 }

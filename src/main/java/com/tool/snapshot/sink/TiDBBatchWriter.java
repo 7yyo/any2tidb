@@ -67,9 +67,9 @@ public class TiDBBatchWriter {
 
         String dbName = tableDbNames.getOrDefault(table, "unknown");
         List<String> fields = fieldOrders.get(table);
-        String cols = String.join(", ", fields);
+        String cols = String.join(", ", fields.stream().map(f -> "`" + escapeBacktick(f) + "`").toList());
         String placeholders = String.join(", ", fields.stream().map(f -> "?").toList());
-        String sql = "INSERT INTO `" + dbName + "`.`" + table + "` (" + cols + ") VALUES (" + placeholders + ")";
+        String sql = "INSERT INTO `" + escapeBacktick(dbName) + "`.`" + escapeBacktick(table) + "` (" + cols + ") VALUES (" + placeholders + ")";
 
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -84,6 +84,10 @@ public class TiDBBatchWriter {
     }
 
     public long getTotalRows() { return totalRows; }
+
+    private static String escapeBacktick(String s) {
+        return s.replace("`", "``");
+    }
 
     public Map<String, Long> getTableRows() { return new HashMap<>(tableRowCounts); }
 }

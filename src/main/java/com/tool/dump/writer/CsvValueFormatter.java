@@ -1,8 +1,12 @@
 package com.tool.dump.writer;
 
+import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 
@@ -16,6 +20,10 @@ import java.util.Base64;
  *   <li>Timestamp         → {@code "yyyy-MM-dd HH:mm:ss.SSS"}</li>
  *   <li>Date              → {@code "yyyy-MM-dd"}</li>
  *   <li>Time              → {@code "HH:mm:ss"}</li>
+ *   <li>LocalDateTime     → {@code "yyyy-MM-dd HH:mm:ss.SSS"}</li>
+ *   <li>LocalDate         → {@code "yyyy-MM-dd"}</li>
+ *   <li>LocalTime         → {@code "HH:mm:ss"}</li>
+ *   <li>BigDecimal        → plain decimal string (no scientific notation)</li>
  *   <li>byte[]            → Base64-encoded string, quoted</li>
  * </ul>
  */
@@ -36,8 +44,14 @@ public final class CsvValueFormatter {
         } else if (value instanceof byte[] bytes) {
             raw = Base64.getEncoder().encodeToString(bytes);
         } else if (value instanceof Timestamp ts) {
-            // Format: yyyy-MM-dd HH:mm:ss.SSS (always 3 fractional digits)
-            long millis = ts.getNanos() / 1_000_000;
+            // Round nanos to milliseconds instead of truncating
+            long nanos = ts.getNanos();
+            long millis = (nanos + 500_000) / 1_000_000; // round half-up
+            if (millis >= 1000) {
+                // Rounding overflow: add 1 second
+                ts = new Timestamp(ts.getTime() + 1000);
+                millis = 0;
+            }
             raw = String.format("%s.%03d",
                     ts.toLocalDateTime().withNano(0)
                       .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
@@ -45,7 +59,22 @@ public final class CsvValueFormatter {
         } else if (value instanceof Date d) {
             raw = d.toLocalDate().toString();                    // yyyy-MM-dd
         } else if (value instanceof Time t) {
-            raw = t.toLocalTime().toString();                    // HH:mm:ss[.nnn]
+            // Strip fractional seconds — Dumpling expects HH:mm:ss only
+            raw = t.toLocalTime().withNano(0).toString();       // HH:mm:ss
+        } else if (value instanceof LocalDateTime ldt) {
+            // JDBC 4.2+ may return LocalDateTime; use space separator, not 'T'
+            raw = String.format("%s.%03d",
+                    ldt.withNano(0)
+                      .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    (ldt.getNano() + 500_000) / 1_000_000);
+        } else if (value instanceof LocalDate ld) {
+            raw = ld.toString();                                 // yyyy-MM-dd
+        } else if (value instanceof LocalTime lt) {
+            // Strip fractional seconds — Dumpling expects HH:mm:ss only
+            raw = lt.withNano(0).toString();                     // HH:mm:ss
+        } else if (value instanceof BigDecimal bd) {
+            // Use plain notation — avoid scientific notation like 1E+10
+            raw = bd.toPlainString();
         } else {
             raw = value.toString();
         }

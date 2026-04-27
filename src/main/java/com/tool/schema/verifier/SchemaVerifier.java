@@ -19,7 +19,7 @@ public class SchemaVerifier {
     public VerifyResult verify(Connection msConn, Connection tidbConn,
                                String schema, String tableName) throws SQLException {
         String fullName = schema + "." + tableName;
-        String objectId = schema + "." + tableName;  // for OBJECT_ID(?)
+        String objectId = "[" + escapeBracket(schema) + "].[" + escapeBracket(tableName) + "]";
 
         // ---- SQL Server 侧 ----
 
@@ -264,6 +264,10 @@ public class SchemaVerifier {
             results.add(verify(msConn, tidbConn, entry[0], entry[1]));
         }
         return results;
+    }
+
+    private static String escapeBracket(String s) {
+        return s.replace("]", "]]");
     }
 
     /**

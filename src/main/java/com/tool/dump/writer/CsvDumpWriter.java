@@ -7,15 +7,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Writes row batches to Dumpling-compatible CSV files.
  *
  * <p>File naming: {@code <outputDir>/<dbName>/<dbName>.<table>.<9-digit-chunk>.csv}
- * (schema is NOT part of the file name — matches Dumpling/Lightning convention for
- * MySQL-style databases where there is no schema layer).
+ * (matches Dumpling/Lightning convention — no schema in file name).
  *
  * <p>Format:
  * <ul>
@@ -41,6 +42,11 @@ public class CsvDumpWriter implements DumpWriter {
     /** Tracks open-file state keyed by "dbName\0schema\0table". */
     private final Map<String, OpenFile> openFiles = new HashMap<>();
 
+    /** Tracks "dbName\0table" to detect schema conflict (same table from different schemas). */
+    private final Map<String, String> tableToSchema = new HashMap<>();
+
+    private boolean closed = false;
+
     /**
      * @param fileSizeThresholdBytes roll to a new chunk file once the current
      *                               file exceeds this size; use {@link Long#MAX_VALUE}
@@ -53,13 +59,31 @@ public class CsvDumpWriter implements DumpWriter {
     @Override
     public void writeBatch(Path outputDir, String dbName, String schema, String table,
                            List<String> columns, RowBatch batch) throws Exception {
+        if (closed) {
+            throw new IllegalStateException("CsvDumpWriter is already closed");
+        }
         if (batch.rows().isEmpty()) return;
 
-        String key = dbName + '\0' + schema + '\0' + table;
+        // Conflict detection: same db+table from different schemas → same file path
+        String fileKey = dbName + '\0' + table;
+        String prevSchema = tableToSchema.putIfAbsent(fileKey, schema);
+        if (prevSchema != null && !prevSchema.equals(schema)) {
+            throw new IllegalStateException(
+                    "Schema conflict: " + prevSchema + "." + table + " and " + schema + "." + table
+                    + " would write to the same file " + dbName + "." + table + ".csv");
+        }
+
+        String key = fileKey + '\0' + schema;
         OpenFile of = openFiles.computeIfAbsent(key,
                 k -> new OpenFile(outputDir, dbName, table));
 
         for (Object[] row : batch.rows()) {
+            if (columns != null && !columns.isEmpty() && row.length != columns.size()) {
+                throw new IllegalArgumentException(
+                        "Row length " + row.length + " != column count " + columns.size()
+                        + " for " + schema + "." + table);
+            }
+
             // Build CSV line
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < row.length; i++) {
@@ -88,11 +112,13 @@ public class CsvDumpWriter implements DumpWriter {
 
     @Override
     public void close() throws Exception {
+        closed = true;
         Exception first = null;
         for (OpenFile of : openFiles.values()) {
             try { of.close(); } catch (Exception e) { if (first == null) first = e; }
         }
         openFiles.clear();
+        tableToSchema.clear();
         if (first != null) throw first;
     }
 
