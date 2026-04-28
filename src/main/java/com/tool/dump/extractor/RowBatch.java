@@ -3,7 +3,7 @@ package com.tool.dump.extractor;
 import java.util.List;
 
 /**
- * One batch of rows fetched from SQL Server.
+ * One batch of rows fetched from the source database.
  *
  * @param rows       each element is one row; columns in the same order as
  *                   {@link DumpExtractor#getColumnNames} returned.

@@ -47,16 +47,6 @@
             <version>8.3.0</version>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>info.picocli</groupId>
-            <artifactId>picocli</artifactId>
-            <version>4.7.5</version>
-        </dependency>
-        <dependency>
             <groupId>io.debezium</groupId>
             <artifactId>debezium-api</artifactId>
             <version>3.5.0.Final</version>
@@ -71,6 +61,11 @@
             <artifactId>debezium-connector-sqlserver</artifactId>
             <version>3.5.0.Final</version>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -83,10 +78,13 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <!-- 默认排除集成测试，需要 -Pintegration 才运行 -->
-                    <excludes>
-                        <exclude>**/integration/**</exclude>
-                    </excludes>
+                    <forkCount>1C</forkCount>
+                    <reuseForks>true</reuseForks>
+                    <argLine>@{argLine} -Dnet.bytebuddy.experimental=true --add-opens java.sql/java.sql=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+                    <!-- ByteBuddy JDK < 24 workaround -->
+                    <systemPropertyVariables>
+                        <net.bytebuddy.experimental>true</net.bytebuddy.experimental>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
@@ -94,13 +92,15 @@
                 <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>copy-jar-to-dist</id>
+                        <id>copy-to-dist</id>
                         <phase>package</phase>
                         <goals><goal>run</goal></goals>
                         <configuration>
                             <target>
                                 <copy file="${project.build.directory}/${project.build.finalName}.jar"
-                                      todir="${project.basedir}/dist/lib" overwrite="true"/>
+                                      todir="${project.basedir}/dist" overwrite="true"/>
+                                <copy file="${project.basedir}/src/main/resources/application.yml"
+                                      todir="${project.basedir}/dist" overwrite="true"/>
                             </target>
                         </configuration>
                     </execution>
@@ -145,9 +145,7 @@
                                 <exclude>com/tool/snapshot/*.class</exclude>
                                 <exclude>com/tool/snapshot/**/*.class</exclude>
                                 <exclude>com/tool/config/**</exclude>
-                                <exclude>com/tool/verifier/SchemaVerifier.class</exclude>
-                                <exclude>com/tool/extractor/SqlServerExtractor.class</exclude>
-                                <exclude>com/tool/writer/TiDBWriter.class</exclude>
+
                             </excludes>
                         </configuration>
                     </execution>
@@ -155,23 +153,4 @@
             </plugin>
         </plugins>
     </build>
-
-    <profiles>
-        <profile>
-            <id>integration</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-surefire-plugin</artifactId>
-                        <configuration>
-                            <excludes>
-                                <exclude>none</exclude>
-                            </excludes>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 </project>

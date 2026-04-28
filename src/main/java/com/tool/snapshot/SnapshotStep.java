@@ -55,27 +55,38 @@ public class SnapshotStep implements MigrationStep {
         Integer batchSize = ctx.get("batchSize", Integer.class);
         Integer fetchSize = ctx.get("fetchSize", Integer.class);
         Integer snapshotThreads = ctx.get("snapshotThreads", Integer.class);
-        Boolean autoEnableCdc = ctx.get("autoEnableCdc", Boolean.class);
+        Integer maxQueueSize = ctx.get("maxQueueSize", Integer.class);
+        Integer pollIntervalMs = ctx.get("pollIntervalMs", Integer.class);
+        Integer offsetCommitIntervalMs = ctx.get("offsetCommitIntervalMs", Integer.class);
+        Double snapshotMaxThreadsMultiplier = ctx.get("snapshotMaxThreadsMultiplier", Double.class);
+        String offsetStoragePath = ctx.get("offsetStoragePath", String.class);
+        String schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
+        Boolean enableCdc = ctx.get("enableCdc", Boolean.class);
 
         SnapshotConfig snapshotConfig = SnapshotConfig.defaults();
+        if (offsetStoragePath != null) snapshotConfig = snapshotConfig.withOffsetStoragePath(offsetStoragePath);
+        if (schemaHistoryPath != null) snapshotConfig = snapshotConfig.withSchemaHistoryPath(schemaHistoryPath);
         if (batchSize != null) snapshotConfig = snapshotConfig.withBatchInsertSize(batchSize);
         if (fetchSize != null) snapshotConfig = snapshotConfig.withSnapshotFetchSize(fetchSize);
         if (snapshotThreads != null) snapshotConfig = snapshotConfig.withSnapshotMaxThreads(snapshotThreads);
+        if (maxQueueSize != null) snapshotConfig = snapshotConfig.withMaxQueueSize(maxQueueSize);
+        if (pollIntervalMs != null) snapshotConfig = snapshotConfig.withPollIntervalMs(pollIntervalMs);
+        if (offsetCommitIntervalMs != null) snapshotConfig = snapshotConfig.withOffsetCommitIntervalMs(offsetCommitIntervalMs);
+        if (snapshotMaxThreadsMultiplier != null) snapshotConfig = snapshotConfig.withSnapshotMaxThreadsMultiplier(snapshotMaxThreadsMultiplier);
 
         new File(snapshotConfig.offsetStoragePath()).mkdirs();
         new File(snapshotConfig.schemaHistoryPath()).mkdirs();
 
-        System.out.print("  Discovering databases ... ");
         List<String> dbNames;
         try (Connection master = DriverManager.getConnection(
-                config.getSource().sqlServerJdbcUrlNoDB(),
+                config.getSource().jdbcUrl(),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
             dbNames = discoverDatabases(master);
         } catch (Exception e) {
-            return StepResult.fatal("Cannot connect to SQL Server: " + e.getMessage());
+            return StepResult.fatal("Cannot connect to source database: " + e.getMessage());
         }
-        System.out.println(dbNames.size() + " found");
+        log.info("database discovery  count={}", dbNames.size());
 
         if (databases != null && !databases.isEmpty()) {
             dbNames = dbNames.stream().filter(databases::contains).toList();
@@ -91,13 +102,10 @@ public class SnapshotStep implements MigrationStep {
         for (String dbName : dbNames) {
             SnapshotDbResult dbResult = snapshotDatabase(
                     dbName, tables, cdcChecker, snapshotConfig,
-                    autoEnableCdc != null && autoEnableCdc);
+                    enableCdc != null && enableCdc);
             dbResults.add(dbResult);
             if (!dbResult.isError()) {
                 totalRows += dbResult.rows();
-            } else {
-                log.error("[\"database snapshot failed\"] [database={}] [error=\"{}\"]",
-                        dbName, dbResult.error());
             }
             printDbResult(dbName, dbResult);
         }
@@ -117,7 +125,7 @@ public class SnapshotStep implements MigrationStep {
                                                SnapshotConfig snapshotConfig,
                                                boolean autoEnable) {
         try (Connection conn = DriverManager.getConnection(
-                config.getSource().sqlServerJdbcUrlForDB(dbName),
+                config.getSource().jdbcUrlTo(dbName),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
 
@@ -168,7 +176,7 @@ public class SnapshotStep implements MigrationStep {
             return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
                     tableList.size(), batchWriter.getTotalRows(), Instant.now(), null);
         } catch (Exception e) {
-            log.error("[\"database snapshot error\"] [database={}] [error=\"{}\"]", dbName, e.getMessage());
+            log.error("database snapshot error  database={}  error=\"{}\"", dbName, e.getMessage());
             return new SnapshotDbResult(dbName, null, null, 0, 0L,
                     Instant.now(), e.getMessage());
         }
@@ -186,10 +194,10 @@ public class SnapshotStep implements MigrationStep {
 
     private List<String[]> discoverTables(Connection conn, List<String> tableFilter) throws Exception {
         List<String[]> tables = new ArrayList<>();
-        String sql = "SELECT s.name, t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE s.name NOT IN ('cdc')";
+        String sql = "SELECT s.name, t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE t.type = 'U' AND t.is_ms_shipped = 0 AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'cdc')";
         if (tableFilter != null && !tableFilter.isEmpty()) {
             String inClause = tableFilter.stream().map(t -> "?").collect(Collectors.joining(","));
-            sql += " WHERE t.name IN (" + inClause + ")";
+            sql += " AND t.name IN (" + inClause + ")";
         }
         sql += " ORDER BY s.name, t.name";
         try (var ps = conn.prepareStatement(sql)) {
@@ -230,17 +238,17 @@ public class SnapshotStep implements MigrationStep {
             json.append("  \"totalTables\": ").append(totalTables).append("\n");
             json.append("}\n");
             Files.writeString(Path.of("snapshot-meta.json"), json);
-            log.info("[\"snapshot-meta.json written\"]");
+            log.info("snapshot-meta.json written");
         } catch (Exception e) {
-            log.warn("[\"failed to write snapshot-meta.json\"] [error=\"{}\"]", e.getMessage());
+            log.warn("failed to write snapshot-meta.json  error=\"{}\"", e.getMessage());
         }
     }
 
     private void printDbResult(String dbName, SnapshotDbResult r) {
         if (r.isError()) {
-            System.out.printf("  %-20s  ERROR: %s%n", dbName, r.error());
+            log.error("database snapshot failed  database={}  error=\"{}\"", dbName, r.error());
         } else {
-            System.out.printf("  %-20s  %d tables, %,d rows, LSN=%s%n",
+            log.info("database snapshot done  database={}  tables={}  rows={}  lsn={}",
                     dbName, r.tables(), r.rows(),
                     r.commitLsn() != null ? r.commitLsn() : "(none)");
         }

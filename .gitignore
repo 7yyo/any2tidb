@@ -1,0 +1,4 @@
+target/
+*.log
+dist/dump-output/
+snapshot-meta.json

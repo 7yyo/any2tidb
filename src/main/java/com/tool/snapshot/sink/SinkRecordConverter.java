@@ -26,7 +26,7 @@ public class SinkRecordConverter {
         }
     }
 
-    private void bindAt(PreparedStatement ps, int idx, Object val) throws SQLException {
+    void bindAt(PreparedStatement ps, int idx, Object val) throws SQLException {
         if (val == null) {
             ps.setNull(idx, Types.VARCHAR);
             return;

@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project name="maven-antrun-" default="main">
-  <target name="main">
-    <copy file="/home/sev7nyo/ms2tidb/target/sqlserver-to-tidb-1.0.0.jar" todir="/home/sev7nyo/ms2tidb/dist" overwrite="true" />
-  </target>
-</project>

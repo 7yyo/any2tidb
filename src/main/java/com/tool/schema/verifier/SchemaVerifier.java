@@ -9,24 +9,24 @@ import java.util.*;
 public class SchemaVerifier {
 
     /**
-     * 对比单张表在 SQL Server 和 TiDB 中的 schema 指标。
+     * 对比单张表在源端和 TiDB 中的 schema 指标。
      *
-     * @param msConn    SQL Server 连接
+     * @param srcConn   源端连接
      * @param tidbConn  TiDB 连接
-     * @param schema    SQL Server schema 名，如 "dbo"
+     * @param schema    源端 schema 名，如 "dbo"
      * @param tableName 表名
      */
-    public VerifyResult verify(Connection msConn, Connection tidbConn,
+    public VerifyResult verify(Connection srcConn, Connection tidbConn,
                                String schema, String tableName) throws SQLException {
         String fullName = schema + "." + tableName;
         String objectId = "[" + escapeBracket(schema) + "].[" + escapeBracket(tableName) + "]";
 
-        // ---- SQL Server 侧 ----
+        // ---- 源端 ----
 
         // 列名（按 column_id 有序）+ MS 侧列类型
         List<String> msColOrder = new ArrayList<>();
         Map<String, String> msColTypes = new LinkedHashMap<>();
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT c.name, t.name AS type_name, c.max_length, c.precision, c.scale " +
                 "FROM sys.columns c " +
                 "JOIN sys.objects o ON c.object_id = o.object_id " +
@@ -68,7 +68,7 @@ public class SchemaVerifier {
 
         // 默认值（归一化后）
         Map<String, String> msDefaults = new LinkedHashMap<>();
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT c.name, dc.definition " +
                 "FROM sys.columns c " +
                 "JOIN sys.objects o ON c.object_id = o.object_id " +
@@ -90,7 +90,7 @@ public class SchemaVerifier {
 
         // 主键
         List<String> msPkCols = new ArrayList<>();
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT c.name FROM sys.index_columns ic " +
                 "JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id " +
                 "JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id " +
@@ -106,7 +106,7 @@ public class SchemaVerifier {
         // 索引名（排除主键）：分为保留索引和已丢弃索引（COLUMNSTORE / FULLTEXT → type 4/5/6）
         Set<String> msIdxNames = new LinkedHashSet<>();
         Set<String> msDroppedIdxNames = new LinkedHashSet<>();
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT name, type FROM sys.indexes " +
                 "WHERE object_id = OBJECT_ID(?) AND is_primary_key = 0 AND type > 0")) {
             ps.setString(1, objectId);
@@ -125,7 +125,7 @@ public class SchemaVerifier {
             }
         }
         // FULLTEXT indexes — also discarded during migration
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT i.name FROM sys.fulltext_indexes fi " +
                 "JOIN sys.indexes i ON fi.unique_index_id = i.index_id AND fi.object_id = i.object_id " +
                 "WHERE fi.object_id = OBJECT_ID(?)")) {
@@ -139,7 +139,7 @@ public class SchemaVerifier {
 
         // CHECK 约束数
         int msChecks = 0;
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT COUNT(*) FROM sys.check_constraints " +
                 "WHERE parent_object_id = OBJECT_ID(?)")) {
             ps.setString(1, objectId);
@@ -151,7 +151,7 @@ public class SchemaVerifier {
         // FK — discarded during migration, not verified
         // NOT NULL 数
         int msNotNull = 0;
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT COUNT(*) FROM sys.columns " +
                 "WHERE object_id = OBJECT_ID(?) AND is_nullable = 0")) {
             ps.setString(1, objectId);
@@ -162,7 +162,7 @@ public class SchemaVerifier {
 
         // AUTO_INCREMENT 列
         String msAiCol = null;
-        try (PreparedStatement ps = msConn.prepareStatement(
+        try (PreparedStatement ps = srcConn.prepareStatement(
                 "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?) AND is_identity = 1")) {
             ps.setString(1, objectId);
             try (ResultSet rs = ps.executeQuery()) {
@@ -257,11 +257,11 @@ public class SchemaVerifier {
     /**
      * 批量校验，返回每张表的 VerifyResult。
      */
-    public List<VerifyResult> verifyAll(Connection msConn, Connection tidbConn,
+    public List<VerifyResult> verifyAll(Connection srcConn, Connection tidbConn,
                                         List<String[]> tableList) throws SQLException {
         List<VerifyResult> results = new ArrayList<>();
         for (String[] entry : tableList) {
-            results.add(verify(msConn, tidbConn, entry[0], entry[1]));
+            results.add(verify(srcConn, tidbConn, entry[0], entry[1]));
         }
         return results;
     }
@@ -271,14 +271,14 @@ public class SchemaVerifier {
     }
 
     /**
-     * 对 SQL Server default_constraints.definition 做归一化，
+     * 对源端 default_constraints.definition 做归一化，
      * 使其与 TiDB COLUMN_DEF 返回的格式尽量一致。
-     * SS 的 definition 格式通常是 ((value)) 或 (value) 或 ('string')。
+     * 源端的 definition 格式通常是 ((value)) 或 (value) 或 ('string')。
      */
     private String normalizeDefault(String raw) {
         if (raw == null) return null;
         String v = raw.trim();
-        // 剥掉 SS 包裹的括号层
+        // 剥掉源端包裹的括号层
         while (v.startsWith("(") && v.endsWith(")")) {
             v = v.substring(1, v.length() - 1).trim();
         }
@@ -287,11 +287,11 @@ public class SchemaVerifier {
             String inner = v.substring(2, v.length() - 1);
             return inner.replace("''", "'");
         }
-        // 普通字符串字面量：SS 保留引号 'val'，TiDB JDBC COLUMN_DEF 返回去引号后的裸值
-        // 例：SS='' → TiDB="" ; SS='CN' → TiDB=CN ; SS='''' → TiDB='
+        // 普通字符串字面量：源端保留引号 'val'，TiDB JDBC COLUMN_DEF 返回去引号后的裸值
+        // 例：SRC='' → TiDB="" ; SRC='CN' → TiDB=CN ; SRC='''' → TiDB='
         if (v.startsWith("'") && v.endsWith("'")) {
             String inner = v.substring(1, v.length() - 1);
-            // SQL Server escapes single-quotes by doubling them inside strings: '' → '
+            // Source escapes single-quotes by doubling them inside strings: '' → '
             return inner.replace("''", "'");
         }
         // 函数映射（与 TypeMapper.mapDefaultValue 保持一致）

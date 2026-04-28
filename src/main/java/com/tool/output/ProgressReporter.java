@@ -24,24 +24,10 @@ public class ProgressReporter {
      * @param current   name of the table currently being processed
      */
     public void print(String dbName, int done, int total, String current) {
-        int filled = (total == 0) ? BAR_WIDTH : (int) Math.round((double) done / total * BAR_WIDTH);
-        String bar = "━".repeat(filled) + "─".repeat(BAR_WIDTH - filled);
-        String line = String.format(" %-" + dbNameWidth + "s  [%s]  %d/%d  %s",
-                dbName, bar, done, total, current);
-        if (line.length() < lastProgressLen) {
-            line = line + " ".repeat(lastProgressLen - line.length());
-        }
-        lastProgressLen = line.length();
-        System.out.print("\r" + line);
-        System.out.flush();
+        // Progress output suppressed — see any2tidb.log
     }
 
-    /** Erase the progress line — call before printing multi-line output. */
     public void clear() {
-        if (lastProgressLen > 0) {
-            System.out.print("\r" + " ".repeat(lastProgressLen) + "\r");
-            System.out.flush();
-            lastProgressLen = 0;
-        }
+        // Progress output suppressed — see any2tidb.log
     }
 }

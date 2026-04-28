@@ -12,7 +12,7 @@ import java.util.*;
 public class SqlServerExtractor implements SchemaExtractor {
 
     /**
-     * List all user databases on the SQL Server instance (excluding system databases).
+     * List all user databases on the source SQL Server instance (excluding system databases).
      */
     public List<String> listDatabases(Connection conn) throws Exception {
         List<String> dbs = new ArrayList<>();
@@ -27,18 +27,19 @@ public class SqlServerExtractor implements SchemaExtractor {
     }
 
     /**
-     * List all tables in the given schemas (or all schemas if schemasFilter is empty/null).
+     * List all tables in the given databases (or all if databasesFilter is empty/null).
      * Returns list of [schemaName, tableName] pairs.
      */
-    public List<String[]> listTables(Connection conn, List<String> schemasFilter, List<String> tablesFilter) throws Exception {
+    public List<String[]> listTables(Connection conn, List<String> databasesFilter, List<String> tablesFilter) throws Exception {
         List<String[]> result = new ArrayList<>();
         StringBuilder sql = new StringBuilder(
             "SELECT s.name AS schema_name, t.name AS table_name " +
             "FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id " +
-            "WHERE t.type = 'U'"
+            "WHERE t.type = 'U' AND t.is_ms_shipped = 0 " +
+            "AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'cdc')"
         );
-        if (schemasFilter != null && !schemasFilter.isEmpty()) {
-            sql.append(" AND s.name IN (").append(placeholders(schemasFilter.size())).append(")");
+        if (databasesFilter != null && !databasesFilter.isEmpty()) {
+            sql.append(" AND s.name IN (").append(placeholders(databasesFilter.size())).append(")");
         }
         if (tablesFilter != null && !tablesFilter.isEmpty()) {
             sql.append(" AND t.name IN (").append(placeholders(tablesFilter.size())).append(")");
@@ -47,7 +48,7 @@ public class SqlServerExtractor implements SchemaExtractor {
 
         try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             int idx = 1;
-            if (schemasFilter != null) for (String s : schemasFilter) ps.setString(idx++, s);
+            if (databasesFilter != null) for (String s : databasesFilter) ps.setString(idx++, s);
             if (tablesFilter != null) for (String t : tablesFilter) ps.setString(idx++, t);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) result.add(new String[]{rs.getString("schema_name"), rs.getString("table_name")});
@@ -61,7 +62,7 @@ public class SqlServerExtractor implements SchemaExtractor {
         table.setSchemaName(schemaName);
         table.setTableName(tableName);
         table.setColumns(extractColumns(conn, schemaName, tableName));
-        table.setPrimaryKeyColumns(extractPrimaryKey(conn, schemaName, tableName));
+        table.setPrimaryKeyColumns(getPrimaryKeyColumns(conn, schemaName, tableName));
         table.setCheckConstraints(extractCheckConstraints(conn, schemaName, tableName));
         table.setUniqueConstraints(extractUniqueConstraints(conn, schemaName, tableName));
         table.setIndexes(extractIndexes(conn, schemaName, tableName));
@@ -95,7 +96,7 @@ public class SqlServerExtractor implements SchemaExtractor {
                 while (rs.next()) {
                     ColumnSchema col = new ColumnSchema();
                     col.setName(rs.getString("name"));
-                    col.setSqlServerType(rs.getString("type_name"));
+                    col.setSourceType(rs.getString("type_name"));
                     int maxLen = rs.getInt("max_length");
                     col.setMaxLength(maxLen == 0 ? null : maxLen);
                     int prec = rs.getInt("precision");
@@ -114,7 +115,8 @@ public class SqlServerExtractor implements SchemaExtractor {
         return cols;
     }
 
-    private List<String> extractPrimaryKey(Connection conn, String schema, String table) throws SQLException {
+    @Override
+    public List<String> getPrimaryKeyColumns(Connection conn, String schema, String table) throws SQLException {
         String sql = """
             SELECT c.name
             FROM sys.indexes i

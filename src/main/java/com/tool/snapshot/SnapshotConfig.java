@@ -16,18 +16,29 @@ public record SnapshotConfig(
         double snapshotMaxThreadsMultiplier
 ) {
 
+    public static final String DEFAULT_OFFSET_STORAGE_PATH = "snapshot-offsets";
+    public static final String DEFAULT_SCHEMA_HISTORY_PATH = "snapshot-schema-history";
+    public static final String DEFAULT_SNAPSHOT_MODE = "initial_only";
+    public static final int DEFAULT_BATCH_INSERT_SIZE = 5000;
+    public static final int DEFAULT_SNAPSHOT_FETCH_SIZE = 2000;
+    public static final int DEFAULT_MAX_QUEUE_SIZE = 8192;
+    public static final int DEFAULT_POLL_INTERVAL_MS = 500;
+    public static final int DEFAULT_OFFSET_COMMIT_INTERVAL_MS = 10000;
+    public static final int DEFAULT_SNAPSHOT_MAX_THREADS = 1;
+    public static final double DEFAULT_SNAPSHOT_MAX_THREADS_MULTIPLIER = 1.0;
+
     public static SnapshotConfig defaults() {
         return new SnapshotConfig(
-                "snapshot-offsets",
-                "snapshot-schema-history",
-                "initial_only",
-                5000,
-                2000,
-                8192,
-                500,
-                10000,
-                1,
-                1.0
+                DEFAULT_OFFSET_STORAGE_PATH,
+                DEFAULT_SCHEMA_HISTORY_PATH,
+                DEFAULT_SNAPSHOT_MODE,
+                DEFAULT_BATCH_INSERT_SIZE,
+                DEFAULT_SNAPSHOT_FETCH_SIZE,
+                DEFAULT_MAX_QUEUE_SIZE,
+                DEFAULT_POLL_INTERVAL_MS,
+                DEFAULT_OFFSET_COMMIT_INTERVAL_MS,
+                DEFAULT_SNAPSHOT_MAX_THREADS,
+                DEFAULT_SNAPSHOT_MAX_THREADS_MULTIPLIER
         );
     }
 
@@ -47,7 +58,43 @@ public record SnapshotConfig(
                 offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
     }
 
+    public SnapshotConfig withOffsetStoragePath(String offsetStoragePath) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
+    public SnapshotConfig withSchemaHistoryPath(String schemaHistoryPath) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
+    public SnapshotConfig withMaxQueueSize(int maxQueueSize) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
+    public SnapshotConfig withPollIntervalMs(int pollIntervalMs) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
+    public SnapshotConfig withOffsetCommitIntervalMs(int offsetCommitIntervalMs) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
     public SnapshotConfig withSnapshotMaxThreads(int snapshotMaxThreads) {
+        return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
+                batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
+                offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
+    }
+
+    public SnapshotConfig withSnapshotMaxThreadsMultiplier(double snapshotMaxThreadsMultiplier) {
         return new SnapshotConfig(offsetStoragePath, schemaHistoryPath, snapshotMode,
                 batchInsertSize, snapshotFetchSize, maxQueueSize, pollIntervalMs,
                 offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
@@ -63,16 +110,16 @@ public record SnapshotConfig(
     }
 
     public static class Builder {
-        private String offsetStoragePath = "snapshot-offsets";
-        private String schemaHistoryPath = "snapshot-schema-history";
-        private String snapshotMode = "initial_only";
-        private int batchInsertSize = 5000;
-        private int snapshotFetchSize = 2000;
-        private int maxQueueSize = 8192;
-        private int pollIntervalMs = 500;
-        private int offsetCommitIntervalMs = 10000;
-        private int snapshotMaxThreads = 1;
-        private double snapshotMaxThreadsMultiplier = 1.0;
+        private String offsetStoragePath = DEFAULT_OFFSET_STORAGE_PATH;
+        private String schemaHistoryPath = DEFAULT_SCHEMA_HISTORY_PATH;
+        private String snapshotMode = DEFAULT_SNAPSHOT_MODE;
+        private int batchInsertSize = DEFAULT_BATCH_INSERT_SIZE;
+        private int snapshotFetchSize = DEFAULT_SNAPSHOT_FETCH_SIZE;
+        private int maxQueueSize = DEFAULT_MAX_QUEUE_SIZE;
+        private int pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
+        private int offsetCommitIntervalMs = DEFAULT_OFFSET_COMMIT_INTERVAL_MS;
+        private int snapshotMaxThreads = DEFAULT_SNAPSHOT_MAX_THREADS;
+        private double snapshotMaxThreadsMultiplier = DEFAULT_SNAPSHOT_MAX_THREADS_MULTIPLIER;
 
         Builder(SnapshotConfig defaults) {
             this.offsetStoragePath = defaults.offsetStoragePath;

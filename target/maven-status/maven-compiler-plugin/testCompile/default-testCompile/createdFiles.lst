@@ -1,9 +1,0 @@
-com/tool/schema/converter/SchemaConverterTest.class
-com/tool/integration/IntegrationTest.class
-com/tool/integration/VerifyIntegrationTest.class
-com/tool/schema/extractor/SqlServerExtractorTest.class
-com/tool/pipeline/MigrationPipelineTest.class
-com/tool/schema/verifier/SchemaVerifierTest.class
-com/tool/schema/writer/TiDBWriterTest.class
-com/tool/schema/converter/TypeMapperTest.class
-com/tool/integration/DdlExecutionTest.class

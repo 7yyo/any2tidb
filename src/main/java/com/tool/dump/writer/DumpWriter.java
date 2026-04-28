@@ -22,7 +22,7 @@ public interface DumpWriter {
      *
      * @param outputDir root directory for all dump output
      * @param dbName    database name (used as sub-directory name)
-     * @param schema    SQL Server schema (e.g. {@code "dbo"})
+     * @param schema    source schema (e.g. {@code "dbo"})
      * @param table     table name
      * @param columns   ordered list of column names matching {@code batch.rows()} column order
      * @param batch     the batch to write
@@ -35,4 +35,10 @@ public interface DumpWriter {
      * all batches for all tables have been written.
      */
     void close() throws Exception;
+
+    /**
+     * Returns the number of output files created by this writer.
+     * After {@link #close()} this still returns the correct count.
+     */
+    int getFileCount();
 }

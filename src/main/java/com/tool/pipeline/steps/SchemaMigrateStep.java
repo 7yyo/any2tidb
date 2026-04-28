@@ -22,12 +22,12 @@ import java.sql.DriverManager;
 import java.util.*;
 
 /**
- * Connects to SQL Server and TiDB, iterates all selected databases,
+ * Connects to source database and TiDB, iterates all selected databases,
  * and for each database: extracts, converts, and writes schema.
  *
  * Reads from context:
  *   "dryRun"          (Boolean)
- *   "schemas"         (List<String>)
+ *   "databases"       (List<String>)
  *   "tables"          (List<String>)
  *   "dropIfExists"    (Boolean)
  *   "continueOnError" (Boolean)
@@ -78,14 +78,14 @@ public class SchemaMigrateStep implements MigrationStep {
     @SuppressWarnings("unchecked")
     public StepResult execute(StepContext ctx) throws Exception {
         boolean dryRun         = Boolean.TRUE.equals(ctx.get("dryRun", Boolean.class));
-        List<String> schemas   = ctx.get("schemas", List.class);
+        List<String> databases = ctx.get("databases", List.class);
         List<String> tables    = ctx.get("tables",  List.class);
         boolean dropIfExists   = Boolean.TRUE.equals(ctx.get("dropIfExists", Boolean.class));
         boolean continueOnError= Boolean.TRUE.equals(ctx.get("continueOnError", Boolean.class));
 
         List<String> dbNames;
         try (Connection masterConn = DriverManager.getConnection(
-                config.getSource().sqlServerJdbcUrlNoDB(),
+                config.getSource().jdbcUrl(),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
@@ -100,13 +100,13 @@ public class SchemaMigrateStep implements MigrationStep {
 
         for (String dbName : dbNames) {
             try (Connection ssConn = DriverManager.getConnection(
-                     config.getSource().sqlServerJdbcUrlForDB(dbName),
+                     config.getSource().jdbcUrlTo(dbName),
                      config.getSource().getUsername(),
                      config.getSource().getPassword());
                  Connection tidbConn = dryRun ? null : openTiDB(dbName)) {
 
                 DbResult dr = migrateOneDb(ssConn, tidbConn, dbName,
-                        schemas, tables, dropIfExists, continueOnError, dryRun);
+                        databases, tables, dropIfExists, continueOnError, dryRun);
                 totalFailed += dr.failed;
 
                 summaries.add(new SummaryPrinter.DbSummary(
@@ -118,16 +118,16 @@ public class SchemaMigrateStep implements MigrationStep {
                 if (dr.stoppedEarly) {
                     progress.clear();
                     if (dr.conflictStop()) {
-                        System.out.println("[ERROR] Stopped early: table name conflict — see any2tidb.log");
+                        log.log("ERROR", "Stopped early: table name conflict", "db", dbName);
                     } else {
-                        System.out.println("[WARN ] Stopped early (continueOnError=false) — see any2tidb.log");
+                        log.log("WARN", "Stopped early (continueOnError=false)", "db", dbName);
                     }
                     stoppedEarlyGlobal = true;
                     stoppedByConflict = dr.conflictStop();
                     break;
                 }
                 if (dryRun && dr.sqlFile() != null) {
-                    System.out.println("[DRY-RUN] " + dbName + " → " + dr.sqlFile());
+                    log.log("INFO", "Dry-run output written", "db", dbName, "file", dr.sqlFile().toString());
                 }
             }
         }
@@ -149,10 +149,10 @@ public class SchemaMigrateStep implements MigrationStep {
             Map<String, ConversionResult> convResults, Path sqlFile) {}
 
     private DbResult migrateOneDb(Connection ssConn, Connection tidbConn,
-                                  String dbName, List<String> schemas, List<String> tables,
+                                  String dbName, List<String> databases, List<String> tables,
                                   boolean dropIfExists, boolean continueOnError,
                                   boolean dryRun) throws Exception {
-        List<String[]> tableList = extractor.listTables(ssConn, schemas, tables);
+        List<String[]> tableList = extractor.listTables(ssConn, databases, tables);
         log.log("INFO", "Starting conversion", "db", dbName, "tables", tableList.size());
 
         // Pre-check: table name conflicts across schemas
@@ -167,7 +167,6 @@ public class SchemaMigrateStep implements MigrationStep {
                 .toList();
         if (!conflicts.isEmpty()) {
             progress.clear();
-            System.out.println("[ERROR] Table name conflict in [" + dbName + "] — see any2tidb.log");
             log.log("ERROR", "Table name conflict", "db", dbName);
             conflicts.forEach(line -> log.log("ERROR", "conflict", "tables", line));
             return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of(), null);
@@ -210,13 +209,38 @@ public class SchemaMigrateStep implements MigrationStep {
                 case ERROR -> { failed++; convResults.put(fullName, result); if (!continueOnError) stopEarly = true; }
                 case SKIP  -> { skipped++; convResults.put(fullName, result); }
             }
+
+            // Log per-table conversion result — tree style
+            switch (result.getStatus()) {
+                case OK -> log.log("INFO", fullName, "status", "OK");
+                case WARN -> {
+                    List<String> warnings = result.getWarnings();
+                    log.log("WARN", fullName, "status", "WARN (" + warnings.size() + ")");
+                    for (int j = 0; j < warnings.size(); j++) {
+                        String prefix = (j == warnings.size() - 1) ? "  └─ " : "  ├─ ";
+                        log.log("WARN", prefix + warnings.get(j));
+                    }
+                }
+                case ERROR -> {
+                    log.log("ERROR", fullName, "status", "ERROR");
+                    log.log("ERROR", "  └─ " + result.getErrorMessage());
+                }
+                case SKIP -> {
+                    log.log("INFO", fullName, "status", "SKIP");
+                    log.log("INFO", "  └─ " + result.getErrorMessage());
+                }
+            }
+
             if (stopEarly) break;
         }
 
         if (!dryRun) {
             progress.print(dbName, total, total, "");
-            System.out.println();
         }
+
+        log.log("INFO", "Database complete", "db", dbName,
+                "total", total, "ok", succeeded - warned, "warn", warned,
+                "error", failed, "skip", skipped);
 
         // Write SQL file for dry-run
         Path sqlFile = null;
@@ -230,7 +254,7 @@ public class SchemaMigrateStep implements MigrationStep {
 
     private Connection openTiDB(String dbName) throws Exception {
         Connection conn = DriverManager.getConnection(
-                config.getTarget().tidbJdbcUrlNoDB(),
+                config.getTarget().tidbJdbcUrl(),
                 config.getTarget().getUsername(),
                 config.getTarget().getPassword());
         try (java.sql.Statement st = conn.createStatement()) {

@@ -63,79 +63,8 @@ public class SummaryPrinter {
             Map<String, ConversionResult> convResults
     ) {}
 
-    /** Print the unified VERIFY SUMMARY table to stdout. */
+    /** Verify summary goes to any2tidb.log — no longer printed to stdout. */
     public void print(List<DbSummary> summaries, List<IssueRow> verifyIssues) {
-        List<IssueRow> allIssues = new ArrayList<>();
-        for (DbSummary db : summaries) {
-            for (Map.Entry<String, ConversionResult> e : db.convResults().entrySet()) {
-                ConversionResult cr = e.getValue();
-                if (cr.getStatus() == ConversionResult.Status.ERROR) {
-                    allIssues.add(new IssueRow(db.dbName(), e.getKey(), "ERROR",
-                            cr.getErrorMessage(), List.of()));
-                } else if (cr.getStatus() == ConversionResult.Status.SKIP) {
-                    allIssues.add(new IssueRow(db.dbName(), e.getKey(), "SKIP",
-                            cr.getErrorMessage(), List.of()));
-                }
-            }
-        }
-        allIssues.addAll(verifyIssues);
-
-        int totalTables   = summaries.stream().mapToInt(DbSummary::total).sum();
-        int totalOk       = summaries.stream().mapToInt(DbSummary::succeededCount).sum();
-        int totalErr      = count(allIssues, "ERROR");
-        int totalSkip     = count(allIssues, "SKIP");
-        int totalMismatch = count(allIssues, "MISMATCH");
-        int totalNote     = count(allIssues, "NOTE");
-
-        int kindW  = 5;
-        int dbW    = Math.max(2, allIssues.stream().mapToInt(i -> i.dbName().length()).max().orElse(2));
-        int tableW = Math.max(5, allIssues.stream().mapToInt(i -> i.tableName().length()).max().orElse(5));
-        int sepLen = 1 + kindW + 2 + dbW + 2 + tableW + 2 + 60;
-        String sep    = " " + "─".repeat(sepLen);
-        String rowFmt = " %-" + kindW + "s  %-" + dbW + "s  %-" + tableW + "s  %s%n";
-
-        System.out.println(sep);
-        System.out.println();
-        System.out.println(" VERIFY SUMMARY");
-        System.out.println(sep);
-
-        StringBuilder globalLine = new StringBuilder(" ");
-        globalLine.append(summaries.size()).append(" databases  ")
-                  .append(totalTables).append(" tables  ")
-                  .append("OK: ").append(totalOk);
-        if (totalErr      > 0) globalLine.append("  ERR: ").append(totalErr);
-        if (totalSkip     > 0) globalLine.append("  SKIP: ").append(totalSkip);
-        if (totalMismatch > 0) globalLine.append("  MISMATCH: ").append(totalMismatch);
-        if (totalNote     > 0) globalLine.append("  NOTE: ").append(totalNote);
-        System.out.println(globalLine);
-        System.out.println(sep);
-
-        if (allIssues.isEmpty()) {
-            System.out.println();
-            return;
-        }
-
-        System.out.println();
-        System.out.printf(rowFmt, "KIND", "DB", "TABLE", "DETAIL");
-        System.out.println(sep);
-
-        boolean firstGroup = true;
-        for (String kind : List.of("NOTE", "MISMATCH", "SKIP", "ERROR")) {
-            List<IssueRow> group = allIssues.stream()
-                    .filter(r -> kind.equals(r.kind())).toList();
-            if (group.isEmpty()) continue;
-            if (!firstGroup) System.out.println(sep);
-            firstGroup = false;
-            for (IssueRow r : group) {
-                System.out.printf(rowFmt, r.kind(), r.dbName(), r.tableName(), r.detail());
-                for (String line : r.extra()) System.out.printf(rowFmt, "", "", "", line);
-            }
-        }
-        System.out.println(sep);
-        System.out.println();
-    }
-
-    private static int count(List<IssueRow> rows, String kind) {
-        return (int) rows.stream().filter(r -> kind.equals(r.kind())).count();
+        // Output suppressed — see any2tidb.log
     }
 }

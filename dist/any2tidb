@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# any2tidb — Any DB → TiDB migration launcher
-# Usage:
-#   ./any2tidb                          # normal run
-#   ./any2tidb --dry-run                # dry-run (print DDL only)
-#   ./any2tidb --tables=orders,users    # override tables
-
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec java -jar "$DIR/any2tidb-1.0.0.jar" "$@"

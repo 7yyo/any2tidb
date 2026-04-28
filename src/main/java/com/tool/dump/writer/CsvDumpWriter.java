@@ -29,7 +29,8 @@ import java.util.Set;
  *   <li>Encoding: UTF-8 without BOM</li>
  * </ul>
  *
- * <p>Thread-safety: not thread-safe. Use one instance per worker thread.
+ * <p>Thread-safety: {@link #writeBatch} is synchronized — one instance can be
+ * shared across multiple threads writing chunks of the same table.
  */
 public class CsvDumpWriter implements DumpWriter {
 
@@ -39,11 +40,17 @@ public class CsvDumpWriter implements DumpWriter {
     /** Maximum bytes per file before rolling to the next chunk. */
     private final long fileSizeThresholdBytes;
 
+    /** Initial chunk index for the first file per table (instead of 0). */
+    private final int startChunkIndex;
+
     /** Tracks open-file state keyed by "dbName\0schema\0table". */
     private final Map<String, OpenFile> openFiles = new HashMap<>();
 
     /** Tracks "dbName\0table" to detect schema conflict (same table from different schemas). */
     private final Map<String, String> tableToSchema = new HashMap<>();
+
+    /** Count of CSV files created across all tables written by this instance. */
+    private int filesCreated = 0;
 
     private boolean closed = false;
 
@@ -53,11 +60,24 @@ public class CsvDumpWriter implements DumpWriter {
      *                               to disable splitting.
      */
     public CsvDumpWriter(long fileSizeThresholdBytes) {
+        this(fileSizeThresholdBytes, 0);
+    }
+
+    /**
+     * @param fileSizeThresholdBytes roll to a new chunk file once the current
+     *                               file exceeds this size; use {@link Long#MAX_VALUE}
+     *                               to disable splitting.
+     * @param startChunkIndex        initial chunk index for the first file per table;
+     *                               use when multiple writers dump different PK ranges
+     *                               of the same table concurrently.
+     */
+    public CsvDumpWriter(long fileSizeThresholdBytes, int startChunkIndex) {
         this.fileSizeThresholdBytes = fileSizeThresholdBytes;
+        this.startChunkIndex = startChunkIndex;
     }
 
     @Override
-    public void writeBatch(Path outputDir, String dbName, String schema, String table,
+    public synchronized void writeBatch(Path outputDir, String dbName, String schema, String table,
                            List<String> columns, RowBatch batch) throws Exception {
         if (closed) {
             throw new IllegalStateException("CsvDumpWriter is already closed");
@@ -74,8 +94,12 @@ public class CsvDumpWriter implements DumpWriter {
         }
 
         String key = fileKey + '\0' + schema;
-        OpenFile of = openFiles.computeIfAbsent(key,
-                k -> new OpenFile(outputDir, dbName, table));
+        boolean[] isNew = {false};
+        OpenFile of = openFiles.computeIfAbsent(key, k -> {
+            isNew[0] = true;
+            return new OpenFile(outputDir, dbName, table, startChunkIndex);
+        });
+        if (isNew[0]) filesCreated++;
 
         for (Object[] row : batch.rows()) {
             if (columns != null && !columns.isEmpty() && row.length != columns.size()) {
@@ -102,6 +126,7 @@ public class CsvDumpWriter implements DumpWriter {
                 of.chunkIndex++;
                 of.bytesWritten = 0;
                 of.open(outputDir, dbName, table);
+                filesCreated++;
             }
 
             of.writer.write(line);
@@ -122,6 +147,11 @@ public class CsvDumpWriter implements DumpWriter {
         if (first != null) throw first;
     }
 
+    /** Returns the number of CSV files created by this writer. */
+    public int getFileCount() {
+        return filesCreated;
+    }
+
     // ── Internal state per table ──────────────────────────────────────────────
 
     private static final class OpenFile {
@@ -129,7 +159,8 @@ public class CsvDumpWriter implements DumpWriter {
         long bytesWritten = 0;
         BufferedWriter writer;
 
-        OpenFile(Path outputDir, String dbName, String table) {
+        OpenFile(Path outputDir, String dbName, String table, int startChunk) {
+            this.chunkIndex = startChunk;
             open(outputDir, dbName, table);
         }
 

@@ -1,20 +1,16 @@
+# any2tidb — Any DB to TiDB
+#
+# Connection info only. All runtime parameters are passed via CLI flags.
+# Passwords use environment variables: SOURCE_PASSWORD, TARGET_PASSWORD
+
 source:
   host: 127.0.0.1
   port: 1433
   username: sa
-  password: Test1234!
+  password: ${SOURCE_PASSWORD:test@123}
 
 target:
   host: 127.0.0.1
   port: 4000
   username: root
-  password: ""
-
-snapshot:
-  offset-storage-path: snapshot-offsets
-  schema-history-path: snapshot-schema-history
-  batch-insert-size: 5000
-  snapshot-fetch-size: 2000
-  max-queue-size: 8192
-  poll-interval-ms: 500
-  offset-commit-interval-ms: 10000
+  password: ${TARGET_PASSWORD:}

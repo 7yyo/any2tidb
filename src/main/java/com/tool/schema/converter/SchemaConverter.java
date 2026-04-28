@@ -149,11 +149,11 @@ public class SchemaConverter {
                         + tidbType + " column — default dropped");
                 defaultVal = null;
             }
-            // Drop empty-string defaults on numeric columns — SQL Server silently coerces '' to 0,
+            // Drop empty-string defaults on numeric columns — source database silently coerces '' to 0,
             // but TiDB rejects them with [1067] Invalid default value ([1067])
             if (defaultVal != null && isNumericTidbType(tidbType) && isEmptyStringLiteral(defaultVal)) {
                 result.addWarning("column '" + col.getName() + "': empty string default is not valid for "
-                        + tidbType + " column (SQL Server coerces '' to 0) — default dropped");
+                        + tidbType + " column (source coerces '' to 0) — default dropped");
                 defaultVal = null;
             }
             if (defaultVal != null && !col.isIdentity()) {
@@ -268,7 +268,7 @@ public class SchemaConverter {
                 boolean isBinary = base.equals("VARBINARY") || base.equals("BINARY");
                 return charLen * (isBinary ? 1 : 4);
             }
-            // Fallback: use SQL Server maxLength if available
+            // Fallback: use source maxLength if available
             int ml = col.getMaxLength();
             return (ml > 0 ? ml : 255) * 4;
         }

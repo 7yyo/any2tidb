@@ -1,413 +1,407 @@
 package com.tool;
 
-import com.tool.cli.DumpCommand;
-import com.tool.cli.SchemaCommand;
-import com.tool.cli.SnapshotCommand;
-import com.tool.common.source.SourceCatalog;
 import com.tool.config.AppConfig;
-import com.tool.dump.extractor.SqlServerDumpExtractor;
 import com.tool.dump.writer.CsvDumpWriter;
+import com.tool.logging.StructuredLogger;
 import com.tool.output.ProgressReporter;
-import com.tool.output.SummaryPrinter;
+
 import com.tool.pipeline.MigrationPipeline;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.pipeline.steps.DumpStep;
 import com.tool.pipeline.steps.PreCheckStep;
-import com.tool.snapshot.SnapshotStep;
 import com.tool.pipeline.steps.SchemaMigrateStep;
+import com.tool.pipeline.steps.VerifyStep;
+import com.tool.snapshot.SnapshotConfig;
+import com.tool.snapshot.SnapshotStep;
 import com.tool.schema.converter.SchemaConverter;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.verifier.SchemaVerifier;
 import com.tool.schema.writer.SchemaWriter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.tool.source.SourceDriver;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.Banner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import picocli.CommandLine;
-import picocli.CommandLine.Command;
 
 import javax.sql.DataSource;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
-@SpringBootApplication
+@SpringBootApplication(exclude = DataSourceAutoConfiguration.class)
 @EnableConfigurationProperties
 public class App implements ApplicationRunner {
-
-    private static final Logger log = LoggerFactory.getLogger(App.class);
-
-    private static Object parsedCommand;
-    private static String[] rawArgs;
 
     private final AppConfig config;
     private final SchemaExtractor extractor;
     private final SchemaConverter converter;
     private final SchemaWriter writer;
     private final SchemaVerifier verifier;
-    private final SqlServerDumpExtractor dumpExtractor;
-    private final DataSource sourceDs;
-    private final DataSource targetDs;
+    private final SourceDriver driver;
 
     public App(AppConfig config, SchemaExtractor extractor, SchemaConverter converter,
                SchemaWriter writer, SchemaVerifier verifier,
-               SqlServerDumpExtractor dumpExtractor,
-               @org.springframework.beans.factory.annotation.Qualifier("sourceDataSource") DataSource sourceDs,
-               @org.springframework.beans.factory.annotation.Qualifier("targetDataSource") DataSource targetDs) {
-        this.config        = config;
-        this.extractor     = extractor;
-        this.converter     = converter;
-        this.writer        = writer;
-        this.verifier      = verifier;
-        this.dumpExtractor = dumpExtractor;
-        this.sourceDs      = sourceDs;
-        this.targetDs      = targetDs;
-    }
-
-    @Command(name = "any2tidb", mixinStandardHelpOptions = true,
-            subcommands = {SchemaCommand.class, DumpCommand.class, SnapshotCommand.class})
-    static class TopLevelCommand implements Runnable {
-        @Override
-        public void run() {}
-    }
-
-    private static void printHelp() {
-        System.out.println(
-"""
-any2tidb — SQL Server to TiDB Migration Tool
-
-Usage:
-  any2tidb schema [options]
-  any2tidb dump   [options]
-  any2tidb --help, -h
-
-Commands:
-  schema    Migrate schema (CREATE TABLE + INDEX) to TiDB
-  dump      Export data as CSV files
-  snapshot  Export data directly to TiDB via Debezium CDC
-
-Run 'any2tidb schema --help', 'any2tidb dump --help', or 'any2tidb snapshot --help' for command-specific options.
-
-Config:
-  conf/config.yml     Source/target connection
-  logs/any2tidb.log   Structured log output
-""");
-    }
-
-    private static void printSchemaHelp() {
-        System.out.println(
-"""
-any2tidb schema — Migrate schema to TiDB
-
-Usage:
-  any2tidb schema [options]
-
-Options:
-  --dry                  Preview DDL without writing to TiDB
-  --tables=t1,t2,...     Only process specified tables (default: all)
-  --dbs=db1,db2          Only process specified databases (default: all)
-  --drop                 Drop existing tables before creating
-  --concurrency=N        Number of databases to migrate in parallel (default: 1)
-  --help, -h             Show this help message
-
-Examples:
-  any2tidb schema --dry
-  any2tidb schema --dbs=Authentication,Entity --dry
-  any2tidb schema --tables=User,Account
-""");
-    }
-
-    private static void printDumpHelp() {
-        System.out.println(
-"""
-any2tidb dump — Export data as CSV files
-
-Usage:
-  any2tidb dump [options]
-
-Options:
-  --tables=t1,t2,...     Only process specified tables (default: all)
-  --dbs=db1,db2          Only process specified databases (default: all)
-  -o DIR                 Output directory (default: output/dump)
-  --concurrency=N        Parallel table export (default: 4)
-  --chunk=N              Rows per fetch (default: 10000)
-  --roll=N               Max CSV file size before rolling (MB, default: 256)
-  --nolock               Use WITH (NOLOCK) on SELECT queries (default: true)
-  --help, -h             Show this help message
-
-Examples:
-  any2tidb dump
-  any2tidb dump --dbs=Authentication --tables=User
-  any2tidb dump -o /tmp/dump --concurrency=8
-""");
-    }
-
-    private static void printSnapshotHelp() {
-        System.out.println(
-"""
-any2tidb snapshot -- Export data directly to TiDB via Debezium CDC
-
-Usage:
-  any2tidb snapshot [options]
-
-Options:
-  --tables=t1,t2,...       Only process specified tables (default: all)
-  --dbs=db1,db2            Only process specified databases (default: all)
-  --batch-size=N           INSERT batch size (default: 5000)
-  --fetch-size=N           Debezium snapshot fetch size (default: 2000)
-  --snapshot-threads=N     Debezium parallel chunk threads (default: 1)
-  --auto-enable-cdc        Automatically enable CDC on SQL Server
-  --help, -h               Show this help message
-
-Prerequisites:
-  SQL Server Agent must be running
-  CDC must be enabled on target databases and tables
-  Run 'any2tidb schema' first to create TiDB tables
-
-Examples:
-  any2tidb snapshot
-  any2tidb snapshot --dbs=Authentication --tables=User
-  any2tidb snapshot --auto-enable-cdc --snapshot-threads=4
-""");
+               SourceDriver driver) {
+        this.config    = config;
+        this.extractor = extractor;
+        this.converter = converter;
+        this.writer    = writer;
+        this.verifier  = verifier;
+        this.driver    = driver;
     }
 
     public static void main(String[] args) {
-        rawArgs = args;
-        boolean hasHelp = Arrays.stream(args).anyMatch(a -> "--help".equals(a) || "-h".equals(a));
+        boolean wantHelp = Arrays.asList(args).contains("--help") || Arrays.asList(args).contains("-h");
 
-        TopLevelCommand top = new TopLevelCommand();
-        CommandLine cmd = new CommandLine(top);
-
-        // Show custom help, no Spring context needed
-        if (hasHelp) {
-            String sub = args.length > 0 && !args[0].startsWith("-") ? args[0] : null;
-            if ("schema".equals(sub)) { printSchemaHelp(); System.exit(0); }
-            if ("dump".equals(sub))   { printDumpHelp();   System.exit(0); }
-            if ("snapshot".equals(sub)){ printSnapshotHelp(); System.exit(0); }
-            printHelp();
-            System.exit(0);
+        if (args.length == 0 || wantHelp) {
+            List<String> pos = positionalArgs(args);
+            if (pos.size() >= 2) {
+                String source = pos.get(0);
+                String mode   = pos.get(1);
+                if (!SOURCES.contains(source)) {
+                    System.out.println("Error: unknown source '" + source + "'. Valid: " + SOURCES);
+                } else if (!MODES.contains(mode)) {
+                    System.out.println("Error: unknown mode '" + mode + "'. Valid: " + MODES);
+                } else {
+                    printUsage(source, mode);
+                }
+            } else if (pos.size() == 1) {
+                String arg = pos.get(0);
+                if (SOURCES.contains(arg)) {
+                    printUsage(arg);
+                } else if (MODES.contains(arg)) {
+                    System.out.println("Error: source is required. Usage: any2tidb <source> " + arg);
+                } else {
+                    System.out.println("Error: unknown argument '" + arg + "'");
+                    System.out.println("Run 'any2tidb --help' for usage.");
+                }
+            } else {
+                printUsage();
+            }
+            return;
         }
-
-        // Parse for validation (unknown flags, type errors) — no help output
-        try {
-            cmd.parseArgs(args);
-        } catch (CommandLine.ParameterException e) {
-            String sub = args.length > 0 && !args[0].startsWith("-") ? args[0] : null;
-            System.err.println("\033[1;31m" + e.getMessage() + "\033[0m");
-            if ("schema".equals(sub)) printSchemaHelp();
-            else if ("dump".equals(sub)) printDumpHelp();
-            else if ("snapshot".equals(sub)) printSnapshotHelp();
-            else printHelp();
-            System.exit(1);
+        if (Arrays.asList(args).contains("--version")) {
+            System.out.println("any2tidb 1.0.0");
+            return;
         }
-
-        CommandLine.ParseResult pr = cmd.getParseResult();
-        CommandLine.ParseResult subResult = pr.subcommand();
-        if (subResult == null) {
-            printHelp();
-            System.exit(0);
-        }
-
-        parsedCommand = subResult.commandSpec().userObject();
-
         SpringApplication app = new SpringApplication(App.class);
-        app.setBanner((env, sourceClass, out) -> {});
-        System.exit(SpringApplication.exit(app.run(rawArgs)));
+        app.setBannerMode(Banner.Mode.OFF);
+        app.setLogStartupInfo(false);
+        app.run(args);
+    }
+
+    private static final Set<String> SOURCES = Set.of("sqlserver");
+    private static final Set<String> MODES   = Set.of("schema", "dump", "snapshot");
+
+    /**
+     * Parse positional args: returns [source, mode] or [source] or [mode] or empty.
+     */
+    private static List<String> positionalArgs(String[] args) {
+        List<String> out = new ArrayList<>();
+        for (String arg : args) {
+            if (arg.startsWith("--") || (arg.startsWith("-") && !arg.startsWith("--"))) continue;
+            out.add(arg);
+        }
+        return out;
+    }
+
+    private static void printUsage() {
+        System.out.println("any2tidb — Any DB → TiDB Migration Tool");
+        System.out.println();
+        System.out.println("Usage: any2tidb <source> <mode> [options]");
+        System.out.println();
+        System.out.println("Sources:");
+        for (String s : SOURCES) System.out.println("  " + s);
+        System.out.println();
+        System.out.println("Modes:");
+        System.out.println("  schema        Migrate schema (DDL) only");
+        System.out.println("  dump          Export data as CSV (Dumpling format)");
+        System.out.println("  snapshot      Stream full data directly to TiDB via Debezium CDC");
+        System.out.println();
+        System.out.println("Run 'any2tidb <source> --help' for source-specific options.");
+        System.out.println("Run 'any2tidb <source> <mode> --help' for mode-specific options.");
+        System.out.println();
+        System.out.println("Other:");
+        System.out.println("  --help, -h    Show this help");
+        System.out.println("  --version     Print version");
+    }
+
+    private static void printUsage(String source) {
+        System.out.println("any2tidb " + source + " — Any DB → TiDB Migration Tool");
+        System.out.println();
+        System.out.println("Usage: any2tidb " + source + " <mode> [options]");
+        System.out.println();
+        System.out.println("Modes:");
+        System.out.println("  schema        Migrate schema (DDL) only");
+        System.out.println("  dump          Export data as CSV (Dumpling format)");
+        System.out.println("  snapshot      Stream full data directly to TiDB via Debezium CDC");
+        System.out.println();
+        if ("sqlserver".equals(source)) {
+            System.out.println("SQL Server options (common across modes):");
+            System.out.println("  --enable-cdc     Automatically enable CDC on source database");
+        }
+        System.out.println();
+        System.out.println("Run 'any2tidb " + source + " <mode> --help' for mode-specific options.");
+    }
+
+    private static void printUsage(String source, String mode) {
+        System.out.println("any2tidb " + source + " " + mode + " — Any DB → TiDB Migration Tool");
+        System.out.println();
+        System.out.println("Usage: any2tidb " + source + " " + mode + " [options]");
+        System.out.println();
+        System.out.println("Options:");
+        if ("schema".equals(mode) || "dump".equals(mode)) {
+            System.out.println("  --dry-run             Print DDL / SQL without executing");
+            System.out.println("  --databases=db1,db2   Filter databases to migrate");
+            System.out.println("  --tables=t1,t2        Migrate only specified tables");
+            System.out.println("  --drop-if-exists      DROP existing tables before creating");
+            System.out.println("  --stop-on-error       Stop on first table failure (default: continue)");
+        }
+        if ("dump".equals(mode)) {
+            System.out.println("  --output-dir=PATH     Output directory (default: dump-output)");
+            System.out.println("  --file-size-mb=N      Max CSV file size in MB (default: 256, 0=unlimited)");
+            System.out.println("  --chunk-size=N        Rows per PK-range chunk (default: 200000)");
+            System.out.println("  --consistency=true    Enable database-level snapshot consistency (default: false)");
+            System.out.println("  --concurrency=N       Number of concurrent table exports (default: 4)");
+        }
+        if ("snapshot".equals(mode)) {
+            System.out.println("  --databases=db1,db2   Only process specified databases (default: all)");
+            System.out.println("  --tables=t1,t2        Only process specified tables");
+            System.out.println("  --batch-size=N        INSERT batch size (default: 5000)");
+            System.out.println("  --fetch-size=N        Debezium snapshot fetch size (default: 2000)");
+            System.out.println("  --snapshot-threads=N  Parallel chunk threads (default: 1)");
+            System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
+            System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
+            System.out.println("  --max-queue-size=N    Debezium engine max queue size (default: 8192)");
+            System.out.println("  --poll-interval-ms=N  Debezium poll interval in ms (default: 500)");
+            System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
+            System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
+        }
+        System.out.println();
+        System.out.println("Configuration: application.yml in working directory (source/target connection only)");
+    }
+
+    private static List<String> parseListOption(ApplicationArguments args, String name) {
+        if (!args.containsOption(name)) return null;
+        List<String> values = args.getOptionValues(name);
+        if (values.isEmpty()) return null;
+        String val = values.get(0);
+        if (val == null || val.isBlank()) return null;
+        return Arrays.stream(val.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+    }
+
+    private static int parseIntOption(ApplicationArguments args, String name, int defaultVal) {
+        if (!args.containsOption(name)) return defaultVal;
+        List<String> values = args.getOptionValues(name);
+        if (values.isEmpty()) return defaultVal;
+        try { return Integer.parseInt(values.get(0)); }
+        catch (NumberFormatException e) { return defaultVal; }
+    }
+
+    // ── Flag whitelists ─────────────────────────────────────────────────────
+    private static final Set<String> COMMON_FLAGS = Set.of(
+            "dry-run", "databases", "tables", "drop-if-exists", "stop-on-error"
+    );
+    private static final Set<String> DUMP_FLAGS = Set.of(
+            "output-dir", "file-size-mb", "chunk-size", "consistency", "concurrency"
+    );
+    private static final Set<String> SNAPSHOT_FLAGS = Set.of(
+            "batch-size", "fetch-size", "snapshot-threads",
+            "offset-storage-path", "schema-history-path",
+            "max-queue-size", "poll-interval-ms", "offset-commit-interval-ms",
+            "snapshot-max-threads-multiplier"
+    );
+
+    private Set<String> knownFlags(String source, String mode) {
+        Set<String> s = new java.util.LinkedHashSet<>(COMMON_FLAGS);
+        if ("dump".equals(mode))     s.addAll(DUMP_FLAGS);
+        if ("snapshot".equals(mode)) s.addAll(SNAPSHOT_FLAGS);
+        s.addAll(driver.ownFlags());
+        return s;
     }
 
     @Override
-    public void run(org.springframework.boot.ApplicationArguments args) throws Exception {
-        ProgressReporter progress = new ProgressReporter();
-        SummaryPrinter printer    = new SummaryPrinter();
+    public void run(ApplicationArguments args) throws Exception {
+        List<String> pos = args.getNonOptionArgs();
+        if (pos.size() < 2) {
+            System.out.println("Usage: any2tidb <source> <mode> [options]");
+            return;
+        }
+        String source = pos.get(0);
+        String mode   = pos.get(1);
 
-        if (parsedCommand instanceof SchemaCommand schema) {
-            runSchema(schema, progress, printer);
-        } else if (parsedCommand instanceof DumpCommand dump) {
-            runDump(dump, progress);
-        } else if (parsedCommand instanceof SnapshotCommand snapshot) {
-            runSnapshot(snapshot, progress);
+        if (!SOURCES.contains(source)) {
+            System.out.println("Error: unknown source '" + source + "'. Valid: " + SOURCES);
+            return;
+        }
+        if (!MODES.contains(mode)) {
+            System.out.println("Error: unknown mode '" + mode + "'. Valid: " + MODES);
+            return;
+        }
+
+        Set<String> allowed = knownFlags(source, mode);
+        for (String name : args.getOptionNames()) {
+            if (!allowed.contains(name)) {
+                System.out.println("Error: unknown option --" + name + " for " + source + " " + mode);
+                System.out.println("Run 'any2tidb " + source + " " + mode + " --help' for usage.");
+                return;
+            }
+        }
+
+        boolean dryRun         = args.containsOption("dry-run");
+        boolean schemaMode     = "schema".equals(mode);
+        boolean dumpMode       = "dump".equals(mode);
+        boolean snapshotMode   = "snapshot".equals(mode);
+
+        // Parse shared CLI flags
+        List<String> databases     = parseListOption(args, "databases");
+        List<String> tables        = parseListOption(args, "tables");
+        boolean dropIfExists       = args.containsOption("drop-if-exists");
+        boolean continueOnError    = !args.containsOption("stop-on-error");
+
+        if (snapshotMode) {
+            runSnapshot(args, databases, tables);
+            return;
+        }
+
+        try (StructuredLogger log = StructuredLogger.open("any2tidb.log")) {
+            log.log("INFO", "Welcome to any2tidb v1.0.0 — Any DB → TiDB Migration Tool");
+            log.log("INFO", "Connection info",
+                    "source", config.getSource().getHost() + ":" + config.getSource().getPort(),
+                    "target", config.getTarget().getHost() + ":" + config.getTarget().getPort(),
+                    "mode", mode);
+
+            ProgressReporter progress = new ProgressReporter();
+
+            StepContext ctx = new StepContext();
+            ctx.put("dryRun",             dryRun);
+            ctx.put("databases",          databases != null ? databases : List.of());
+            ctx.put("tables",             tables   != null ? tables   : List.of());
+            ctx.put("dropIfExists",        dropIfExists);
+            ctx.put("continueOnError",     continueOnError);
+
+            // Parse consistency flag early for PreCheck edition check
+            boolean useSnapshot = false;
+            if (dumpMode && args.containsOption("consistency")) {
+                String v = args.getOptionValues("consistency").get(0).toLowerCase();
+                if ("true".equals(v)) useSnapshot = true;
+                else if (!"false".equals(v)) {
+                    log.log("ERROR", "Invalid --consistency value: " + v
+                            + " — valid: true, false");
+                    throw new IllegalArgumentException("Invalid --consistency: " + v);
+                }
+            }
+            ctx.put("dumpSnapshot", useSnapshot);
+
+            List<MigrationStep> steps = new ArrayList<>();
+            steps.add(new PreCheckStep(config, driver.consistencyProvider()));
+
+            if (dumpMode) {
+                String outputDir          = args.containsOption("output-dir")
+                        ? args.getOptionValues("output-dir").get(0) : "dump-output";
+                int fileSizeMb            = parseIntOption(args, "file-size-mb", 256);
+                int chunkSize             = parseIntOption(args, "chunk-size", 200000);
+                int concurrency           = parseIntOption(args, "concurrency", 4);
+
+                ctx.put("dumpOutputDir",       outputDir);
+                ctx.put("dumpFileSizeMb",      fileSizeMb);
+                ctx.put("dumpChunkSize",       chunkSize);
+                ctx.put("dumpConcurrency",     concurrency);
+
+                long threshold = fileSizeMb <= 0
+                        ? Long.MAX_VALUE : (long) fileSizeMb * 1024 * 1024;
+                steps.add(new DumpStep(config, extractor, driver.dumpExtractor(),
+                        () -> new CsvDumpWriter(threshold), driver.consistencyProvider(), log));
+            } else {
+                steps.add(new SchemaMigrateStep(config, extractor, converter, writer, log, progress));
+                steps.add(new VerifyStep(config, verifier, log));
+            }
+
+            StepResult result = new MigrationPipeline(steps).run(ctx);
+            log.log("INFO", "Goodbye", "fatal", result.isFatal());
+
+            if (result.isFatal()) {
+                System.err.println("Error: " + result.message());
+                System.exit(1);
+            }
+            Integer totalFailed = ctx.get("totalFailed", Integer.class);
+            if (totalFailed != null && totalFailed > 0) System.exit(1);
         }
     }
 
-    private void runSchema(SchemaCommand schema, ProgressReporter progress, SummaryPrinter printer) throws Exception {
-        String command = "schema";
-        printBanner(command, schema.dryRun, schema.databases, schema.tables, schema.dropIfExists, schema.concurrency);
-        log.info("[\"any2tidb started\"] [command={}] [dryRun={}]", command, schema.dryRun);
-
-        StepContext ctx = new StepContext();
-        ctx.put("dryRun",           schema.dryRun);
-        ctx.put("tablesOverride",   schema.tables);
-        ctx.put("databasesOverride", schema.databases);
-        ctx.put("dropIfExists",     schema.dropIfExists);
-        ctx.put("continueOnError",  true);
-        ctx.put("concurrency",      schema.concurrency);
-
-        List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, true));
-        steps.add(new SchemaMigrateStep(config, extractor, converter, writer, progress, printer, verifier, sourceDs, targetDs));
-
-        executePipeline(ctx, steps, command);
+    private DataSource createTargetDataSource() {
+        var db = config.getTarget();
+        HikariConfig hikari = new HikariConfig();
+        hikari.setJdbcUrl(db.tidbJdbcUrl());
+        hikari.setUsername(db.getUsername());
+        hikari.setPassword(db.getPassword());
+        hikari.setMaximumPoolSize(10);
+        hikari.setMinimumIdle(1);
+        hikari.setConnectionTimeout(30000);
+        return new HikariDataSource(hikari);
     }
 
-    private void runDump(DumpCommand dump, ProgressReporter progress) throws Exception {
-        String command = "dump";
-        printBanner(command, false, dump.databases, dump.tables, dump.concurrency, dump.outputDir, dump.chunkSize, dump.fileSizeMb, dump.nolock);
-        log.info("[\"any2tidb started\"] [command={}]", command);
+    private void runSnapshot(ApplicationArguments args,
+                             List<String> databases, List<String> tables) throws Exception {
+        int batchSize                = parseIntOption(args, "batch-size", SnapshotConfig.DEFAULT_BATCH_INSERT_SIZE);
+        int fetchSize                = parseIntOption(args, "fetch-size", SnapshotConfig.DEFAULT_SNAPSHOT_FETCH_SIZE);
+        int snapshotThreads          = parseIntOption(args, "snapshot-threads", SnapshotConfig.DEFAULT_SNAPSHOT_MAX_THREADS);
+        boolean enableCdc       = args.containsOption("enable-cdc");
+        String offsetStoragePath     = args.containsOption("offset-storage-path")
+                ? args.getOptionValues("offset-storage-path").get(0) : null;
+        String schemaHistoryPath     = args.containsOption("schema-history-path")
+                ? args.getOptionValues("schema-history-path").get(0) : null;
+        int maxQueueSize             = parseIntOption(args, "max-queue-size", SnapshotConfig.DEFAULT_MAX_QUEUE_SIZE);
+        int pollIntervalMs           = parseIntOption(args, "poll-interval-ms", SnapshotConfig.DEFAULT_POLL_INTERVAL_MS);
+        int offsetCommitIntervalMs   = parseIntOption(args, "offset-commit-interval-ms", SnapshotConfig.DEFAULT_OFFSET_COMMIT_INTERVAL_MS);
 
-        StepContext ctx = new StepContext();
-        ctx.put("tablesOverride",   dump.tables);
-        ctx.put("databasesOverride", dump.databases);
-        ctx.put("outputDir",        dump.outputDir);
-        ctx.put("concurrency",      dump.concurrency);
-        ctx.put("chunkSize",        dump.chunkSize);
-        ctx.put("fileSizeMb",       dump.fileSizeMb);
-        ctx.put("nolock",           dump.nolock);
+        try (StructuredLogger log = StructuredLogger.open("any2tidb.log")) {
+            log.log("INFO", "Welcome to any2tidb v1.0.0 — Any DB → TiDB Migration Tool");
+            log.log("INFO", "Connection info",
+                    "source", config.getSource().getHost() + ":" + config.getSource().getPort(),
+                    "target", config.getTarget().getHost() + ":" + config.getTarget().getPort(),
+                    "mode", "snapshot");
 
-        List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, false));
-        long sizeThreshold = dump.fileSizeMb * 1024L * 1024L;
-        steps.add(new DumpStep(config, (SourceCatalog) extractor, dumpExtractor,
-                () -> new CsvDumpWriter(sizeThreshold), progress));
+            DataSource targetDs = createTargetDataSource();
+            try {
+                StepContext ctx = new StepContext();
+                ctx.put("dryRun",            false);
+                ctx.put("tables",            tables   != null ? tables   : List.of());
+                ctx.put("databases",         databases != null ? databases : List.of());
+                ctx.put("batchSize",         batchSize);
+                ctx.put("fetchSize",         fetchSize);
+                ctx.put("snapshotThreads",   snapshotThreads);
+                ctx.put("enableCdc",        enableCdc);
+                ctx.put("maxQueueSize",      maxQueueSize);
+                ctx.put("pollIntervalMs",    pollIntervalMs);
+                ctx.put("offsetCommitIntervalMs", offsetCommitIntervalMs);
+                if (offsetStoragePath != null) ctx.put("offsetStoragePath", offsetStoragePath);
+                if (schemaHistoryPath != null) ctx.put("schemaHistoryPath", schemaHistoryPath);
 
-        executePipeline(ctx, steps, command);
-    }
+                List<MigrationStep> steps = new ArrayList<>();
+                steps.add(new PreCheckStep(config));
+                steps.add(new SnapshotStep(config, targetDs));
 
-    private void runSnapshot(SnapshotCommand snapshot, ProgressReporter progress) throws Exception {
-        String command = "snapshot";
-        System.out.println();
-        System.out.printf("any2tidb %s | %s → %s%n",
-                command, connInfo(config.getSource()), connInfo(config.getTarget()));
-        System.out.println(SEP);
+                StepResult result = new MigrationPipeline(steps).run(ctx);
+                log.log("INFO", "Goodbye", "fatal", result.isFatal());
 
-        java.util.LinkedHashMap<String, String> filters = new java.util.LinkedHashMap<>();
-        if (snapshot.databases != null && !snapshot.databases.isEmpty())
-            filters.put("databases", String.join(", ", snapshot.databases));
-        if (snapshot.tables != null && !snapshot.tables.isEmpty())
-            filters.put("tables", String.join(", ", snapshot.tables));
-        if (snapshot.batchSize != 5000)
-            filters.put("batch-size", String.valueOf(snapshot.batchSize));
-        if (snapshot.fetchSize != 2000)
-            filters.put("fetch-size", String.valueOf(snapshot.fetchSize));
-        if (snapshot.snapshotThreads != 1)
-            filters.put("threads", String.valueOf(snapshot.snapshotThreads));
-        if (snapshot.autoEnableCdc)
-            filters.put("auto-enable-cdc", "true");
-        printFilters(filters);
-
-        System.out.println();
-        System.out.println("── Snapshot " + SEP.substring(11));
-        System.out.println();
-
-        log.info("[\"any2tidb started\"] [command={}]", command);
-
-        StepContext ctx = new StepContext();
-        ctx.put("tablesOverride",   snapshot.tables);
-        ctx.put("databasesOverride", snapshot.databases);
-        ctx.put("batchSize",        snapshot.batchSize);
-        ctx.put("fetchSize",        snapshot.fetchSize);
-        ctx.put("snapshotThreads",  snapshot.snapshotThreads);
-        ctx.put("autoEnableCdc",    snapshot.autoEnableCdc);
-
-        List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, false));
-        steps.add(new SnapshotStep(config, targetDs));
-
-        executePipeline(ctx, steps, command);
-    }
-
-    private void executePipeline(StepContext ctx, List<MigrationStep> steps, String command) {
-        StepResult result;
-        try {
-            result = new MigrationPipeline(steps).run(ctx);
-        } catch (Exception e) {
-            log.error("[\"pipeline failed\"] [error=\"{}\"]", e.getMessage());
-            System.err.println("[FATAL] " + e.getMessage());
-            result = StepResult.fatal(e.getMessage());
-        }
-
-        log.info("[\"any2tidb finished\"] [fatal={}] [message=\"{}\"]", result.isFatal(), result.message());
-        if (result.isFatal() && !Boolean.TRUE.equals(ctx.get("preCheckFailed", Boolean.class))) {
-            System.err.println("[ERROR] " + result.message());
-        }
-
-        Integer totalFailed = ctx.get("totalFailed", Integer.class);
-        if ((totalFailed != null && totalFailed > 0) || result.isFatal()) {
-            System.exit(1);
-        }
-    }
-
-    private String connInfo(AppConfig.DbConfig db) {
-        return db.getHost() + ":" + db.getPort();
-    }
-
-    private static final String SEP = "─────────────────────────────────────────────────────────────────";
-
-    private void printBanner(String command, boolean dryRun,
-                             List<String> databases, List<String> tables,
-                             boolean dropIfExists, int concurrency) {
-        System.out.println();
-        System.out.printf("any2tidb %s | %s → %s%n",
-                command, connInfo(config.getSource()), connInfo(config.getTarget()));
-        System.out.println(SEP);
-
-        java.util.LinkedHashMap<String, String> filters = new java.util.LinkedHashMap<>();
-        if (databases != null && !databases.isEmpty())
-            filters.put("databases", String.join(", ", databases));
-        if (tables != null && !tables.isEmpty())
-            filters.put("tables", String.join(", ", tables));
-        if (dryRun)
-            filters.put("mode", "dry-run");
-        if (dropIfExists)
-            filters.put("drop", "true");
-        if (concurrency > 1)
-            filters.put("concurrency", String.valueOf(concurrency));
-        printFilters(filters);
-
-        System.out.println();
-        System.out.println("── Migration " + SEP.substring(12));
-        System.out.println();
-    }
-
-    private void printBanner(String command, boolean dryRun,
-                             List<String> databases, List<String> tables,
-                             int concurrency, String outputDir,
-                             int chunkSize, int fileSizeMb, boolean nolock) {
-        System.out.println();
-        System.out.printf("any2tidb %s | %s → %s%n",
-                command, connInfo(config.getSource()), connInfo(config.getTarget()));
-        System.out.println(SEP);
-
-        java.util.LinkedHashMap<String, String> filters = new java.util.LinkedHashMap<>();
-        if (databases != null && !databases.isEmpty())
-            filters.put("databases", String.join(", ", databases));
-        if (tables != null && !tables.isEmpty())
-            filters.put("tables", String.join(", ", tables));
-        if (concurrency != 4)
-            filters.put("concurrency", String.valueOf(concurrency));
-        if (outputDir != null && !outputDir.isEmpty())
-            filters.put("output", outputDir);
-        if (chunkSize != 10000)
-            filters.put("chunk", String.valueOf(chunkSize));
-        if (fileSizeMb != 256)
-            filters.put("roll", fileSizeMb + " MB");
-        if (!nolock)
-            filters.put("nolock", "false");
-        printFilters(filters);
-
-        System.out.println();
-        System.out.println("── Dump " + SEP.substring(8));
-        System.out.println();
-    }
-
-    private void printFilters(java.util.LinkedHashMap<String, String> filters) {
-        if (filters.isEmpty()) return;
-        int keyWidth = filters.keySet().stream().mapToInt(String::length).max().orElse(0);
-        for (var entry : filters.entrySet()) {
-            System.out.printf("  %-" + keyWidth + "s  %s%n", entry.getKey(), entry.getValue());
+                if (result.isFatal()) {
+                    System.err.println("Error: " + result.message());
+                    System.exit(1);
+                }
+            } finally {
+                if (targetDs instanceof HikariDataSource) {
+                    ((HikariDataSource) targetDs).close();
+                }
+            }
         }
     }
 }

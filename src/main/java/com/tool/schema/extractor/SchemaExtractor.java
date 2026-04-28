@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * Source-agnostic contract for reading schema metadata.
- * Decouple pipeline steps from the SQL Server implementation so future
+ * Decouple pipeline steps from the source database implementation so future
  * extractors (e.g. PostgresExtractor) can be wired in without touching step code.
  */
 public interface SchemaExtractor {
@@ -19,8 +19,14 @@ public interface SchemaExtractor {
      * Each entry is a two-element array: [schemaName, tableName].
      * Empty lists mean "no filter" (return all).
      */
-    List<String[]> listTables(Connection conn, List<String> schemas, List<String> tables) throws Exception;
+    List<String[]> listTables(Connection conn, List<String> databases, List<String> tables) throws Exception;
 
     /** Extract full column + index metadata for one table. */
     TableSchema extractTable(Connection conn, String schema, String table) throws Exception;
+
+    /**
+     * Return the ordered list of primary key column names for one table.
+     * Returns an empty list if the table has no primary key.
+     */
+    List<String> getPrimaryKeyColumns(Connection conn, String schema, String table) throws Exception;
 }

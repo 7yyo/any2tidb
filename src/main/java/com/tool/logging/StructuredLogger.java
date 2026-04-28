@@ -6,16 +6,18 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 
 /**
- * Writes structured log lines to a file (append mode).
- * Format: [timestamp] [LEVEL] ["message"] [key=value] ...
- * All writes go to the file only — never to stdout.
+ * Writes structured log lines to a file (append mode) in TiDB-compatible format.
+ *
+ * <pre>
+ * [2026/04/28 13:30:01.123 +08:00] [INFO] ["message"] [key=value] [key="quoted value"]
+ * </pre>
  *
  * <p>Not thread-safe; call only from a single thread.</p>
  */
 public class StructuredLogger implements AutoCloseable {
 
     private static final DateTimeFormatter TIMESTAMP_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS Z");
+            DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss.SSS XXX");
 
     private final PrintWriter out;
 
@@ -48,18 +50,30 @@ public class StructuredLogger implements AutoCloseable {
                     "fields must be key-value pairs; got " + fields.length + " element(s)");
         }
         StringBuilder sb = new StringBuilder();
+
+        // [2026/04/28 13:30:01.123 +08:00]
         sb.append('[').append(ZonedDateTime.now().format(TIMESTAMP_FORMATTER)).append(']');
+
+        // [INFO]
         sb.append(" [").append(level).append(']');
+
+        // ["message"]
         sb.append(" [\"").append(message).append("\"]");
+
+        // [key=value] or [key="value with spaces"]
         for (int i = 0; i + 1 < fields.length; i += 2) {
+            sb.append(' ');
             String k = String.valueOf(fields[i]);
             String v = String.valueOf(fields[i + 1]);
-            boolean quote = v.contains(" ") || v.isEmpty();
-            sb.append(" [").append(k).append('=');
-            if (quote) sb.append('"').append(v).append('"');
-            else       sb.append(v);
+            sb.append('[').append(k).append('=');
+            if (v.contains(" ") || v.isEmpty()) {
+                sb.append('"').append(v).append('"');
+            } else {
+                sb.append(v);
+            }
             sb.append(']');
         }
+
         out.println(sb);
     }
 

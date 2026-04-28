@@ -4,37 +4,43 @@ import com.tool.config.AppConfig;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
+import com.tool.source.ConsistencyProvider;
 
-import java.util.List;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.sql.Connection;
+import java.sql.DriverManager;
 
 /**
- * Pre-flight validation: checks that source and target hosts are configured,
- * then publishes resolved config values into StepContext for downstream steps.
+ * Pre-flight validation: checks that source and target hosts are configured
+ * and reachable. When consistency mode is enabled, also checks source edition
+ * prerequisites.
+ *
+ * All runtime parameters (databases, tables, dropIfExists, continueOnError)
+ * are already set in StepContext by App.java from CLI flags.
  *
  * Reads from context:
- *   "dryRun"        (Boolean)       — set by App before pipeline.run()
- *   "tablesOverride" (List<String>)  — optional CLI override, may be null
- *
- * Writes to context:
- *   "dryRun"          (Boolean)       — re-published after null-safe normalization
- *   "schemas"        (List<String>)
- *   "tables"         (List<String>)
- *   "dropIfExists"   (Boolean)
- *   "continueOnError" (Boolean)
+ *   "dryRun"          (Boolean) — normalizes to non-null boolean
+ *   "dumpSnapshot"    (Boolean) — triggers edition check
  */
 public class PreCheckStep implements MigrationStep {
 
     private final AppConfig config;
+    private final ConsistencyProvider consistency;
 
     public PreCheckStep(AppConfig config) {
+        this(config, null);
+    }
+
+    public PreCheckStep(AppConfig config, ConsistencyProvider consistency) {
         this.config = config;
+        this.consistency = consistency;
     }
 
     @Override
     public String name() { return "PreCheck"; }
 
     @Override
-    @SuppressWarnings("unchecked")
     public StepResult execute(StepContext ctx) {
         String srcHost = config.getSource().getHost();
         if (srcHost == null || srcHost.isBlank()) {
@@ -45,17 +51,66 @@ public class PreCheckStep implements MigrationStep {
             return StepResult.fatal("target.host is not configured in application.yml");
         }
 
-        Boolean dryRun = ctx.get("dryRun", Boolean.class);
-        List<String> tablesOverride = ctx.get("tablesOverride", List.class);
-        List<String> schemas = config.getConvert().getSchemas();
-        List<String> tables  = tablesOverride != null ? tablesOverride : config.getConvert().getTables();
+        // Quick TCP pre-check first (instant for unreachable hosts)
+        int srcPort = config.getSource().getPort();
+        if (!isReachable(srcHost, srcPort)) {
+            return StepResult.fatal("Cannot reach source database at " + srcHost + ":" + srcPort);
+        }
 
-        ctx.put("dryRun",          dryRun != null && dryRun);
-        ctx.put("schemas",         schemas  != null ? schemas : List.of());
-        ctx.put("tables",          tables   != null ? tables  : List.of());
-        ctx.put("dropIfExists",    config.getConvert().isDropIfExists());
-        ctx.put("continueOnError", config.getConvert().isContinueOnError());
+        // Real JDBC login check (catches non-SQL-Server services on the port)
+        String jdbcError = tryJdbcLogin();
+        if (jdbcError != null) {
+            return StepResult.fatal("Cannot connect to source database at " + srcHost + ":" + srcPort
+                    + " — " + jdbcError);
+        }
+
+        int tgtPort = config.getTarget().getPort();
+        if (!isReachable(tgtHost, tgtPort)) {
+            return StepResult.fatal("Cannot reach TiDB at " + tgtHost + ":" + tgtPort);
+        }
+
+        // Normalize dryRun to non-null boolean
+        Boolean dryRun = ctx.get("dryRun", Boolean.class);
+        ctx.put("dryRun", dryRun != null && dryRun);
+
+        // Edition check for consistency mode
+        boolean useSnapshot = Boolean.TRUE.equals(ctx.get("dumpSnapshot", Boolean.class));
+        if (useSnapshot && consistency != null) {
+            try (Connection c = DriverManager.getConnection(
+                    config.getSource().jdbcUrl(),
+                    config.getSource().getUsername(),
+                    config.getSource().getPassword())) {
+                consistency.checkPrerequisites(c);
+            } catch (Exception e) {
+                return StepResult.fatal(e.getMessage());
+            }
+        }
 
         return StepResult.ok("config validated");
+    }
+
+    /** Attempt a JDBC login to verify the source database is reachable. Returns error message or null. */
+    protected String tryJdbcLogin() {
+        try {
+            DriverManager.setLoginTimeout(5);
+            try (Connection c = DriverManager.getConnection(
+                    config.getSource().jdbcUrl(),
+                    config.getSource().getUsername(),
+                    config.getSource().getPassword())) {
+                // connection succeeded, nothing more needed
+            }
+            return null;
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+    }
+
+    private static boolean isReachable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 2000);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
