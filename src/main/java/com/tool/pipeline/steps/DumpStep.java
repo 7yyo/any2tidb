@@ -385,17 +385,7 @@ public class DumpStep implements MigrationStep {
             pool.awaitTermination(24, TimeUnit.HOURS);
 
             for (Future<DumpTableResult> f : futures) {
-                DumpTableResult r = f.get();
-                allResults.add(r);
-                if (r.isError()) {
-                    log.log("ERROR", "Table dump failed",
-                            "table", r.schema() + "." + r.table(), "error", r.error());
-                } else {
-                    log.log("INFO", "Table dump complete",
-                            "table", r.schema() + "." + r.table(),
-                            "rows", r.rows(), "files", r.files(),
-                            "ms", r.elapsedMs());
-                }
+                allResults.add(f.get());
             }
         } catch (Exception e) {
             log.log("ERROR", "Database dump failed", "db", dbName, "error", e.getMessage());
@@ -427,15 +417,23 @@ public class DumpStep implements MigrationStep {
                         });
 
                 writer.close();
+                int files = writer.getFileCount();
+                long elapsed = System.currentTimeMillis() - start;
+                log.log("INFO", "Table dump complete",
+                        "table", schema + "." + table,
+                        "rows", rowCount[0], "files", files, "ms", elapsed);
                 return new DumpTableResult(dbName, schema, table,
-                        rowCount[0], 0, System.currentTimeMillis() - start, null);
+                        rowCount[0], files, elapsed, null);
             } finally {
                 try { conn.close(); } catch (Exception ignored) {}
             }
         } catch (Exception e) {
             try { writer.close(); } catch (Exception ignored) {}
+            long elapsed = System.currentTimeMillis() - start;
+            log.log("ERROR", "Table dump failed",
+                    "table", schema + "." + table, "error", e.getMessage());
             return new DumpTableResult(dbName, schema, table,
-                    rowCount[0], 0, System.currentTimeMillis() - start, e.getMessage());
+                    rowCount[0], 0, elapsed, e.getMessage());
         }
     }
 
