@@ -25,7 +25,7 @@ public class DebeziumEngineFactory {
     public DebeziumEngine<ChangeEvent<String, String>> create(
             String dbName,
             SnapshotConfig snapshotConfig,
-            List<String> tableFilter,
+            List<String[]> tableFilter,
             SnapshotSink sink,
             Runnable onComplete) {
 
@@ -36,9 +36,13 @@ public class DebeziumEngineFactory {
         props.setProperty("database.port", String.valueOf(source.getPort()));
         props.setProperty("database.user", source.getUsername());
         props.setProperty("database.password", source.getPassword());
-        props.setProperty("database.dbname", dbName);
-        props.setProperty("database.server.name", "any2tidb_" + dbName);
-        props.setProperty("database.history.file.filename",
+        props.setProperty("database.names", dbName);
+        props.setProperty("topic.prefix", "any2tidb_" + dbName);
+        props.setProperty("database.encrypt", "true");
+        props.setProperty("database.trustServerCertificate", "true");
+        props.setProperty("schema.history.internal",
+                "io.debezium.storage.file.history.FileSchemaHistory");
+        props.setProperty("schema.history.internal.file.filename",
                 snapshotConfig.schemaHistoryPath() + "/" + dbName + ".history");
         props.setProperty("offset.storage.file.filename",
                 snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset");
@@ -48,6 +52,9 @@ public class DebeziumEngineFactory {
         props.setProperty("poll.interval.ms", String.valueOf(snapshotConfig.pollIntervalMs()));
         props.setProperty("offset.flush.interval.ms", String.valueOf(snapshotConfig.offsetCommitIntervalMs()));
         props.setProperty("snapshot.max.threads", String.valueOf(snapshotConfig.snapshotMaxThreads()));
+        props.setProperty("decimal.handling.mode", "string");
+        int maxBatchSize = Math.min(snapshotConfig.snapshotFetchSize(), snapshotConfig.maxQueueSize() / 2);
+        props.setProperty("max.batch.size", String.valueOf(maxBatchSize));
         props.setProperty("table.include.list", snapshotConfig.buildTableIncludeList(tableFilter));
 
         log.info("[\"creating debezium engine\"] [database={}] [snapshotMode={}] [tables={}]",

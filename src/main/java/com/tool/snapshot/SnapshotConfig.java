@@ -19,9 +19,9 @@ public record SnapshotConfig(
     public static final String DEFAULT_OFFSET_STORAGE_PATH = "snapshot-offsets";
     public static final String DEFAULT_SCHEMA_HISTORY_PATH = "snapshot-schema-history";
     public static final String DEFAULT_SNAPSHOT_MODE = "initial_only";
-    public static final int DEFAULT_BATCH_INSERT_SIZE = 5000;
-    public static final int DEFAULT_SNAPSHOT_FETCH_SIZE = 2000;
-    public static final int DEFAULT_MAX_QUEUE_SIZE = 8192;
+    public static final int DEFAULT_BATCH_INSERT_SIZE = 10000;
+    public static final int DEFAULT_SNAPSHOT_FETCH_SIZE = 10000;
+    public static final int DEFAULT_MAX_QUEUE_SIZE = 16384;
     public static final int DEFAULT_POLL_INTERVAL_MS = 500;
     public static final int DEFAULT_OFFSET_COMMIT_INTERVAL_MS = 10000;
     public static final int DEFAULT_SNAPSHOT_MAX_THREADS = 1;
@@ -100,12 +100,17 @@ public record SnapshotConfig(
                 offsetCommitIntervalMs, snapshotMaxThreads, snapshotMaxThreadsMultiplier);
     }
 
-    public String buildTableIncludeList(List<String> tables) {
+    /**
+     * Builds a Debezium {@code table.include.list} regex from schema+table pairs.
+     * Each entry in {@code tables} is {@code [schemaName, tableName]}.
+     * When empty or null, matches all schemas and tables.
+     */
+    public String buildTableIncludeList(List<String[]> tables) {
         if (tables == null || tables.isEmpty()) {
-            return "dbo\\..*";
+            return ".*\\..*";
         }
         return tables.stream()
-                .map(t -> "dbo\\." + t)
+                .map(t -> t[0] + "\\." + t[1])
                 .collect(Collectors.joining(","));
     }
 

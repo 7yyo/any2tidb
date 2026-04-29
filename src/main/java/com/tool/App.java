@@ -175,15 +175,16 @@ public class App implements ApplicationRunner {
         if ("snapshot".equals(mode)) {
             System.out.println("  --databases=db1,db2   Only process specified databases (default: all)");
             System.out.println("  --tables=t1,t2        Only process specified tables");
-            System.out.println("  --batch-size=N        INSERT batch size (default: 5000)");
-            System.out.println("  --fetch-size=N        Debezium snapshot fetch size (default: 2000)");
+            System.out.println("  --batch-size=N        INSERT batch size (default: 10000)");
+            System.out.println("  --fetch-size=N        Debezium snapshot fetch size (default: 10000)");
             System.out.println("  --snapshot-threads=N  Parallel chunk threads (default: 1)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
-            System.out.println("  --max-queue-size=N    Debezium engine max queue size (default: 8192)");
+            System.out.println("  --max-queue-size=N    Debezium engine max queue size (default: 16384)");
             System.out.println("  --poll-interval-ms=N  Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
+            System.out.println("  --enable-cdc         Automatically enable CDC on source database and tables");
         }
         System.out.println();
         System.out.println("Configuration: application.yml in working directory (source/target connection only)");
@@ -217,7 +218,7 @@ public class App implements ApplicationRunner {
             "batch-size", "fetch-size", "snapshot-threads",
             "offset-storage-path", "schema-history-path",
             "max-queue-size", "poll-interval-ms", "offset-commit-interval-ms",
-            "snapshot-max-threads-multiplier"
+            "snapshot-max-threads-multiplier", "enable-cdc"
     );
 
     private Set<String> knownFlags(String source, String mode) {
@@ -388,7 +389,7 @@ public class App implements ApplicationRunner {
 
                 List<MigrationStep> steps = new ArrayList<>();
                 steps.add(new PreCheckStep(config));
-                steps.add(new SnapshotStep(config, targetDs));
+                steps.add(new SnapshotStep(config, targetDs, log));
 
                 StepResult result = new MigrationPipeline(steps).run(ctx);
                 log.log("INFO", "Goodbye", "fatal", result.isFatal());

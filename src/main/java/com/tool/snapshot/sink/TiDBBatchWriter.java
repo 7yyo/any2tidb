@@ -1,7 +1,6 @@
 package com.tool.snapshot.sink;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.tool.logging.StructuredLogger;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -15,22 +14,27 @@ import java.util.Map;
 
 public class TiDBBatchWriter {
 
-    private static final Logger log = LoggerFactory.getLogger(TiDBBatchWriter.class);
-
     private final DataSource dataSource;
     private final SinkRecordConverter converter;
     private final int batchSize;
+    private final StructuredLogger log;
 
     private final Map<String, List<Map<String, Object>>> buffer = new HashMap<>();
     private final Map<String, List<String>> fieldOrders = new HashMap<>();
     private final Map<String, String> tableDbNames = new HashMap<>();
     private long totalRows = 0L;
+    private long lastLogRows = 0L;
+    private long lastLogMs = System.currentTimeMillis();
+    private static final long LOG_INTERVAL_ROWS = 100_000;
+    private static final long LOG_INTERVAL_MS = 15_000;
     private final Map<String, Long> tableRowCounts = new HashMap<>();
 
-    public TiDBBatchWriter(DataSource dataSource, SinkRecordConverter converter, int batchSize) {
+    public TiDBBatchWriter(DataSource dataSource, SinkRecordConverter converter, int batchSize,
+                           StructuredLogger log) {
         this.dataSource = dataSource;
         this.converter = converter;
         this.batchSize = batchSize;
+        this.log = log;
     }
 
     public void accumulate(String dbName, String table, Map<String, Object> after) {
@@ -42,11 +46,18 @@ public class TiDBBatchWriter {
         totalRows++;
         tableRowCounts.merge(table, 1L, Long::sum);
 
+        long now = System.currentTimeMillis();
+        if (totalRows - lastLogRows >= LOG_INTERVAL_ROWS || now - lastLogMs >= LOG_INTERVAL_MS) {
+            log.log("INFO", "snapshot progress", "rows", totalRows, "tables", tableRowCounts.size());
+            lastLogRows = totalRows;
+            lastLogMs = now;
+        }
+
         if (buffer.get(table).size() >= batchSize) {
             try {
                 flushTable(table);
             } catch (Exception e) {
-                log.error("[\"flush failed\"] [table={}] [error=\"{}\"]", table, e.getMessage());
+                log.log("ERROR", "flush failed", "table", tableDbNames.getOrDefault(table, "?") + "." + table, "error", e.getMessage());
             }
         }
     }
@@ -56,6 +67,9 @@ public class TiDBBatchWriter {
             if (!buffer.get(table).isEmpty()) {
                 flushTable(table);
             }
+            long rows = tableRowCounts.getOrDefault(table, 0L);
+            String dbName = tableDbNames.getOrDefault(table, "?");
+            log.log("INFO", "table complete", "table", dbName + "." + table, "rows", rows);
         }
         totalRows = 0;
         tableRowCounts.clear();
@@ -74,12 +88,11 @@ public class TiDBBatchWriter {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             for (Map<String, Object> row : rows) {
-                converter.bind(ps, row, fields);
+                converter.bind(ps, dbName, table, row, fields);
                 ps.addBatch();
             }
             ps.executeBatch();
         }
-
         rows.clear();
     }
 

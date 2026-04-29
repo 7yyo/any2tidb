@@ -39,7 +39,7 @@ public class AppConfig {
         }
 
         public String tidbJdbcUrl() {
-            return String.format("jdbc:mysql://%s:%d?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=utf8&connectTimeout=30000&socketTimeout=300000", host, port);
+            return String.format("jdbc:mysql://%s:%d?useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&characterEncoding=utf8&connectTimeout=30000&socketTimeout=300000", host, port);
         }
     }
 }

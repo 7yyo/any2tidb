@@ -133,6 +133,7 @@ public class DumpStep implements MigrationStep {
 
         List<DumpTableResult> allResults = new ArrayList<>();
         long totalRows = 0L;
+        long dumpStartMs = System.currentTimeMillis();
 
         long threshold = fileSizeMb <= 0
                 ? Long.MAX_VALUE : (long) fileSizeMb * 1024 * 1024;
@@ -165,6 +166,14 @@ public class DumpStep implements MigrationStep {
         ctx.put("dumpStartLsnByDb", startLsnByDb);
 
         long errors = allResults.stream().filter(DumpTableResult::isError).count();
+        long totalFiles = allResults.stream().mapToLong(DumpTableResult::files).sum();
+        long totalMs = System.currentTimeMillis() - dumpStartMs;
+        log.log("INFO", "Dump finished",
+                "tables", allResults.size(),
+                "rows", totalRows,
+                "files", totalFiles,
+                "errors", errors,
+                "ms", totalMs);
         return errors == 0
                 ? StepResult.ok("dump complete, tables=" + allResults.size() + " rows=" + totalRows)
                 : StepResult.ok("dump complete with " + errors + " errors, rows=" + totalRows);

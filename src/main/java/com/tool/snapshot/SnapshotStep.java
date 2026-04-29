@@ -1,6 +1,7 @@
 package com.tool.snapshot;
 
 import com.tool.config.AppConfig;
+import com.tool.logging.StructuredLogger;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
@@ -12,8 +13,6 @@ import com.tool.snapshot.sink.SnapshotSink;
 import com.tool.snapshot.sink.TiDBBatchWriter;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.sql.DataSource;
 import java.io.File;
@@ -33,15 +32,16 @@ import java.util.stream.Collectors;
 
 public class SnapshotStep implements MigrationStep {
 
-    private static final Logger log = LoggerFactory.getLogger(SnapshotStep.class);
     private static final long ENGINE_TIMEOUT_MINUTES = 30;
 
     private final AppConfig config;
     private final DataSource targetDs;
+    private final StructuredLogger log;
 
-    public SnapshotStep(AppConfig config, DataSource targetDs) {
+    public SnapshotStep(AppConfig config, DataSource targetDs, StructuredLogger log) {
         this.config = config;
         this.targetDs = targetDs;
+        this.log = log;
     }
 
     @Override
@@ -86,7 +86,7 @@ public class SnapshotStep implements MigrationStep {
         } catch (Exception e) {
             return StepResult.fatal("Cannot connect to source database: " + e.getMessage());
         }
-        log.info("database discovery  count={}", dbNames.size());
+        log.log("INFO", "database discovery", "count", dbNames.size());
 
         if (databases != null && !databases.isEmpty()) {
             dbNames = dbNames.stream().filter(databases::contains).toList();
@@ -98,8 +98,10 @@ public class SnapshotStep implements MigrationStep {
         CdcPreChecker cdcChecker = new CdcPreChecker(config.getSource());
         List<SnapshotDbResult> dbResults = new ArrayList<>();
         long totalRows = 0L;
+        long startMs = System.currentTimeMillis();
 
         for (String dbName : dbNames) {
+            long dbStartMs = System.currentTimeMillis();
             SnapshotDbResult dbResult = snapshotDatabase(
                     dbName, tables, cdcChecker, snapshotConfig,
                     enableCdc != null && enableCdc);
@@ -107,8 +109,13 @@ public class SnapshotStep implements MigrationStep {
             if (!dbResult.isError()) {
                 totalRows += dbResult.rows();
             }
-            printDbResult(dbName, dbResult);
+            long dbMs = System.currentTimeMillis() - dbStartMs;
+            printDbResult(dbName, dbResult, dbMs);
         }
+
+        long totalMs = System.currentTimeMillis() - startMs;
+        log.log("INFO", "snapshot complete", "databases", dbResults.size(),
+                "rows", totalRows, "ms", totalMs);
 
         ctx.put("snapshotSummaries", dbResults);
         ctx.put("snapshotTotalRows", totalRows);
@@ -137,15 +144,23 @@ public class SnapshotStep implements MigrationStep {
             }
 
             TiDBBatchWriter batchWriter = new TiDBBatchWriter(
-                    targetDs, new SinkRecordConverter(), snapshotConfig.batchInsertSize());
+                    targetDs, new SinkRecordConverter(targetDs), snapshotConfig.batchInsertSize(), log);
             SnapshotSink sink = new SnapshotSink(batchWriter);
 
+            // Delete previous offset so snapshot always runs fresh
+            Path offsetFile = Path.of(snapshotConfig.offsetStoragePath(), dbName + ".offset");
+            try { Files.deleteIfExists(offsetFile); } catch (Exception ignored) {}
+            Path historyFile = Path.of(snapshotConfig.schemaHistoryPath(), dbName + ".history");
+            try { Files.deleteIfExists(historyFile); } catch (Exception ignored) {}
+
             DebeziumEngineFactory factory = new DebeziumEngineFactory(config.getSource());
+            log.log("INFO", "snapshot starting", "database", dbName, "tables", tableList.size());
+
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> engineError = new AtomicReference<>();
 
             DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
-                    dbName, snapshotConfig, tables, sink, done::countDown);
+                    dbName, snapshotConfig, tableList, sink, done::countDown);
 
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
@@ -154,14 +169,36 @@ public class SnapshotStep implements MigrationStep {
                         engine.run();
                     } catch (Throwable t) {
                         engineError.set(t);
+                    } finally {
                         done.countDown();
                     }
                 });
-                boolean completed = done.await(ENGINE_TIMEOUT_MINUTES, TimeUnit.MINUTES);
-                if (!completed) {
-                    return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
-                            tableList.size(), batchWriter.getTotalRows(), Instant.now(),
-                            "Snapshot timed out after " + ENGINE_TIMEOUT_MINUTES + " minutes");
+                // Wait for snapshot data flow to finish, then close engine.
+                // Debezium 3.5 SQL Server connector loops in streaming phase even
+                // with initial_only, so we detect completion by data flow stalling.
+                long lastRows = 0;
+                long idleStartMs = 0;
+                long startMs = System.currentTimeMillis();
+                while (!done.await(5, TimeUnit.SECONDS)) {
+                    long rows = batchWriter.getTotalRows();
+                    if (rows > 0 && rows == lastRows) {
+                        if (idleStartMs == 0) {
+                            idleStartMs = System.currentTimeMillis();
+                        } else if (System.currentTimeMillis() - idleStartMs > 15_000) {
+                            log.log("INFO", "snapshot finished",
+                                    "rows", rows);
+                            engine.close();
+                            break;
+                        }
+                    } else {
+                        idleStartMs = 0;
+                        lastRows = rows;
+                    }
+                    if (System.currentTimeMillis() - startMs > TimeUnit.MINUTES.toMillis(ENGINE_TIMEOUT_MINUTES)) {
+                        return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
+                                tableList.size(), batchWriter.getTotalRows(), Instant.now(),
+                                "Snapshot timed out after " + ENGINE_TIMEOUT_MINUTES + " minutes");
+                    }
                 }
                 if (engineError.get() != null) {
                     return new SnapshotDbResult(dbName, null, null, 0, 0L,
@@ -176,7 +213,7 @@ public class SnapshotStep implements MigrationStep {
             return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
                     tableList.size(), batchWriter.getTotalRows(), Instant.now(), null);
         } catch (Exception e) {
-            log.error("database snapshot error  database={}  error=\"{}\"", dbName, e.getMessage());
+            log.log("ERROR", "database snapshot error", "database", dbName, "error", e.getMessage());
             return new SnapshotDbResult(dbName, null, null, 0, 0L,
                     Instant.now(), e.getMessage());
         }
@@ -238,19 +275,19 @@ public class SnapshotStep implements MigrationStep {
             json.append("  \"totalTables\": ").append(totalTables).append("\n");
             json.append("}\n");
             Files.writeString(Path.of("snapshot-meta.json"), json);
-            log.info("snapshot-meta.json written");
+            log.log("INFO", "snapshot-meta.json written");
         } catch (Exception e) {
-            log.warn("failed to write snapshot-meta.json  error=\"{}\"", e.getMessage());
+            log.log("WARN", "failed to write snapshot-meta.json", "error", e.getMessage());
         }
     }
 
-    private void printDbResult(String dbName, SnapshotDbResult r) {
+    private void printDbResult(String dbName, SnapshotDbResult r, long elapsedMs) {
         if (r.isError()) {
-            log.error("database snapshot failed  database={}  error=\"{}\"", dbName, r.error());
+            log.log("ERROR", "database snapshot failed", "database", dbName, "error", r.error());
         } else {
-            log.info("database snapshot done  database={}  tables={}  rows={}  lsn={}",
-                    dbName, r.tables(), r.rows(),
-                    r.commitLsn() != null ? r.commitLsn() : "(none)");
+            log.log("INFO", "database snapshot done", "database", dbName,
+                    "tables", r.tables(), "rows", r.rows(), "ms", elapsedMs,
+                    "lsn", r.commitLsn() != null ? r.commitLsn() : "(none)");
         }
     }
 }

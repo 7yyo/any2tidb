@@ -52,26 +52,26 @@ public class CdcPreChecker {
 
     public List<String> getTablesWithoutCdc(Connection conn, String dbName,
                                              List<String[]> tables) throws Exception {
-        String sql = "SELECT t.name FROM cdc.change_tables ct " +
+        String sql = "SELECT s.name, t.name FROM cdc.change_tables ct " +
                 "JOIN sys.tables t ON ct.source_object_id = t.object_id " +
                 "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
-                "WHERE s.name = ? AND t.name IN (" +
+                "WHERE t.name IN (" +
                 tables.stream().map(t -> "?").collect(Collectors.joining(",")) + ")";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, "dbo");
             for (int i = 0; i < tables.size(); i++) {
-                ps.setString(i + 2, tables.get(i)[1]);
+                ps.setString(i + 1, tables.get(i)[1]);
             }
             Set<String> enabled = new HashSet<>();
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    enabled.add(rs.getString(1));
+                    enabled.add(rs.getString(1) + "." + rs.getString(2));
                 }
             }
             List<String> missing = new ArrayList<>();
             for (String[] t : tables) {
-                if (!enabled.contains(t[1])) {
-                    missing.add(t[1]);
+                String key = t[0] + "." + t[1];
+                if (!enabled.contains(key)) {
+                    missing.add(key);
                 }
             }
             return missing;
@@ -113,7 +113,7 @@ public class CdcPreChecker {
                     cdcEnabled = true;
                 } else {
                     return new CdcCheckResult(true,
-                            "CDC is not enabled on database '" + dbName + "'. Use --auto-enable-cdc or run: EXEC sys.sp_cdc_enable_db",
+                            "CDC is not enabled on database '" + dbName + "'. Use --enable-cdc or run: EXEC sys.sp_cdc_enable_db",
                             true, false, tables.stream().map(t -> t[1]).toList());
                 }
             }
@@ -122,14 +122,14 @@ public class CdcPreChecker {
             if (!missing.isEmpty()) {
                 if (autoEnable) {
                     for (String[] t : tables) {
-                        if (missing.contains(t[1])) {
+                        if (missing.contains(t[0] + "." + t[1])) {
                             enableCdcForTable(conn, dbName, t[0], t[1]);
                         }
                     }
                     missing = List.of();
                 } else {
                     return new CdcCheckResult(true,
-                            "CDC not enabled for tables: " + missing + ". Use --auto-enable-cdc or run: EXEC sys.sp_cdc_enable_table",
+                            "CDC not enabled for tables: " + missing + ". Use --enable-cdc or run: EXEC sys.sp_cdc_enable_table",
                             true, true, missing);
                 }
             }

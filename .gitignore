@@ -1,4 +1,6 @@
 target/
 *.log
 dist/dump-output/
+dist/snapshot-offsets/
+dist/snapshot-schema-history/
 snapshot-meta.json

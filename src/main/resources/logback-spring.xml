@@ -1,0 +1,29 @@
+<configuration>
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>any2tidb.log</file>
+        <append>true</append>
+        <immediateFlush>true</immediateFlush>
+        <encoder>
+            <pattern>[%date{yyyy/MM/dd HH:mm:ss.SSS Z}] [%level] ["%msg"]%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Suppress noisy Debezium internal logs -->
+    <logger name="io.debezium.util.Threads" level="WARN"/>
+    <logger name="io.debezium.jdbc.JdbcConnection" level="WARN"/>
+    <logger name="io.debezium.embedded.async" level="WARN"/>
+    <logger name="io.debezium.pipeline.ChangeEventSourceCoordinator" level="WARN"/>
+    <logger name="io.debezium.connector.sqlserver.SqlServerStreamingChangeEventSource" level="WARN"/>
+    <logger name="io.debezium.connector.sqlserver.SqlServerChangeEventSourceCoordinator" level="WARN"/>
+    <!-- Keep snapshot progress at INFO: table-by-table export -->
+    <logger name="io.debezium.relational.RelationalSnapshotChangeEventSource" level="INFO"/>
+    <!-- Default Debezium: WARN for everything else -->
+    <logger name="io.debezium" level="WARN"/>
+
+    <!-- Spring boot startup noise -->
+    <logger name="org.springframework" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="FILE" />
+    </root>
+</configuration>
