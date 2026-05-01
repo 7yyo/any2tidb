@@ -13,9 +13,15 @@ public class SnapshotJsonParser {
     public record ParsedRecord(
             String dbName, String schema, String table,
             Map<String, Object> before, Map<String, Object> after,
-            String op, String commitLsn, String changeLsn, String snapshot
+            String op, String snapshot
     ) {
-        public boolean isSnapshot() { return "true".equals(snapshot) || "last".equals(snapshot); }
+        public boolean isSnapshot() {
+            // Debezium 3.x snapshot field values:
+            //   "true" / "first" / "first_in_data_collection" — data rows
+            //   "last" / "last_in_data_collection" — last row of chunk
+            //   "false" — streaming
+            return snapshot != null && !"false".equals(snapshot);
+        }
     }
 
     public ParsedRecord parse(String json) throws Exception {
@@ -26,8 +32,6 @@ public class SnapshotJsonParser {
         String dbName = source != null ? source.path("db").asText() : null;
         String schema = source != null ? source.path("schema").asText() : null;
         String table = source != null ? source.path("table").asText() : null;
-        String commitLsn = source != null ? source.path("commit_lsn").asText(null) : null;
-        String changeLsn = source != null ? source.path("change_lsn").asText(null) : null;
         String snapshot = source != null ? source.path("snapshot").asText(null) : null;
         String op = payload.path("op").asText(null);
 
@@ -35,12 +39,23 @@ public class SnapshotJsonParser {
         Map<String, Object> before = toMap(payload.get("before"));
 
         return new ParsedRecord(dbName, schema, table, before, after,
-                op, commitLsn, changeLsn, snapshot);
+                op, snapshot);
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> toMap(JsonNode node) {
+    public static Map<String, Object> toMap(JsonNode node) {
         if (node == null || node.isNull()) return null;
-        return mapper.convertValue(node, LinkedHashMap.class);
+        return new ObjectMapper().convertValue(node, LinkedHashMap.class);
+    }
+
+    /**
+     * Parse a Debezium event.key() JSON string into a Map of PK column names to values.
+     * The key JSON format is: {"payload":{"pk_col1":val1,"pk_col2":val2}}
+     */
+    public Map<String, Object> parseKey(String keyJson) throws Exception {
+        if (keyJson == null || keyJson.isEmpty()) return null;
+        JsonNode root = mapper.readTree(keyJson);
+        JsonNode payload = root.has("payload") ? root.get("payload") : root;
+        return toMap(payload);
     }
 }

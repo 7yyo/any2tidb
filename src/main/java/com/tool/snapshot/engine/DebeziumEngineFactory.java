@@ -57,6 +57,10 @@ public class DebeziumEngineFactory {
         props.setProperty("max.batch.size", String.valueOf(maxBatchSize));
         props.setProperty("table.include.list", snapshotConfig.buildTableIncludeList(tableFilter));
 
+        // ORDERED single-threaded: guarantees "snapshot=last" is processed after
+        // all data events, so engine.run() return means everything is complete.
+        // No need for idle-timeout polling or manual engine.close().
+
         log.info("[\"creating debezium engine\"] [database={}] [snapshotMode={}] [tables={}]",
                 dbName, snapshotConfig.snapshotMode(), snapshotConfig.buildTableIncludeList(tableFilter));
 

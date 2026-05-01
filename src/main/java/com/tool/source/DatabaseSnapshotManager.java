@@ -1,5 +1,7 @@
 package com.tool.source;
 
+import static com.tool.common.SqlUtils.escapeBracket;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -252,10 +254,6 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
     }
 
     // ── Utilities ────────────────────────────────────────────────────────────
-
-    private static String escapeBracket(String s) {
-        return s.replace("]", "]]");
-    }
 
     /** Quote a SQL Server identifier name with brackets. */
     private static String quoteName(String name) {

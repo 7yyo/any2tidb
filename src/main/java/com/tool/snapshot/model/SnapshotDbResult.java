@@ -5,8 +5,6 @@ import java.util.List;
 
 public record SnapshotDbResult(
         String dbName,
-        String commitLsn,
-        String changeLsn,
         int tables,
         long rows,
         Instant completedAt,

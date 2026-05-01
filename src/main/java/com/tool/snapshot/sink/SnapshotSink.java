@@ -1,19 +1,21 @@
 package com.tool.snapshot.sink;
 
-import io.debezium.engine.ChangeEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.tool.logging.Log;
+import io.debezium.engine.ChangeEvent;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SnapshotSink {
 
-    private static final Logger log = LoggerFactory.getLogger(SnapshotSink.class);
-
     private final TiDBBatchWriter batchWriter;
     private final SnapshotJsonParser parser = new SnapshotJsonParser();
-    private String commitLsn;
-    private String changeLsn;
+    private static final Logger log = LoggerFactory.getLogger(SnapshotSink.class);
+    private final Map<String, Long> tableCounts = new HashMap<>();
+    private volatile boolean snapshotComplete;
 
     public SnapshotSink(TiDBBatchWriter batchWriter) {
         this.batchWriter = batchWriter;
@@ -23,28 +25,81 @@ public class SnapshotSink {
         for (ChangeEvent<String, String> event : events) {
             try {
                 String json = event.value();
-                if (json == null) continue;
+                if (json == null) {
+                    Log.debug(log, "debezium event skipped", "reason", "null value");
+                    continue;
+                }
                 SnapshotJsonParser.ParsedRecord record = parser.parse(json);
-                if (!record.isSnapshot()) continue;
-                if (record.after() == null) continue;
+
+                // "last" = overall snapshot done; "last_in_data_collection" = per-table done
+                // These events carry the last row data — accumulate first, then signal completion
+                boolean isLastOverall = "last".equals(record.snapshot());
+                boolean isLastInTable = "last_in_data_collection".equals(record.snapshot());
+
+                if (!record.isSnapshot()) {
+                    Log.debug(log, "debezium event skipped",
+                            "reason", "non-snapshot",
+                            "table", fullName(record),
+                            "snapshot", record.snapshot(),
+                            "op", record.op());
+                    continue;
+                }
+                if (record.after() == null) {
+                    Log.debug(log, "debezium event skipped",
+                            "reason", "null after",
+                            "table", fullName(record),
+                            "snapshot", record.snapshot());
+                    // Even without data, still signal completion
+                    if (isLastInTable || isLastOverall) {
+                        batchWriter.tableComplete(record.table(), record.dbName());
+                    }
+                    if (isLastOverall) {
+                        snapshotComplete = true;
+                    }
+                    continue;
+                }
+                long n = tableCounts.merge(record.table(), 1L, Long::sum);
+                Log.debug(log, "debezium record",
+                        "table", fullName(record),
+                        "n", n,
+                        "keys", keysPreview(record));
                 batchWriter.accumulate(record.dbName(), record.table(), record.after());
-                trackLsn(record);
+
+                if (isLastInTable || isLastOverall) {
+                    batchWriter.tableComplete(record.table(), record.dbName());
+                }
+                if (isLastOverall) {
+                    snapshotComplete = true;
+                }
             } catch (Exception e) {
-                log.error("[\"record failed\"] [error=\"{}\"]", e.getMessage());
+                Log.warn(log, "record failed", "error", e.getMessage());
             }
         }
     }
 
-    private void trackLsn(SnapshotJsonParser.ParsedRecord record) {
-        if (record.commitLsn() != null) commitLsn = record.commitLsn();
-        if (record.changeLsn() != null) changeLsn = record.changeLsn();
+    public boolean isSnapshotComplete() { return snapshotComplete; }
+
+    private static String fullName(SnapshotJsonParser.ParsedRecord r) {
+        return (r.dbName() != null ? r.dbName() : "?") + "." + (r.table() != null ? r.table() : "?");
     }
 
-    public String getCommitLsn() { return commitLsn; }
-    public String getChangeLsn() { return changeLsn; }
-
-    public void reset() {
-        commitLsn = null;
-        changeLsn = null;
+    private static String keysPreview(SnapshotJsonParser.ParsedRecord r) {
+        if (r.after() == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (var e : r.after().entrySet()) {
+            if (shown >= 3) { sb.append("..."); break; }
+            if (shown > 0 && shown < 3) sb.append(", ");
+            sb.append(e.getKey()).append("=").append(e.getValue());
+            shown++;
+        }
+        return sb.toString();
     }
+
+
+    public void logTableCounts() {
+        if (tableCounts.isEmpty()) return;
+        Log.debug(log, "debezium records per table", "counts", tableCounts.toString());
+    }
+
 }

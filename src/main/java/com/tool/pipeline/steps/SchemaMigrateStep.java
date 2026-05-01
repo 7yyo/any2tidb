@@ -3,7 +3,9 @@ package com.tool.pipeline.steps;
 import com.tool.common.model.ConversionResult;
 import com.tool.common.model.TableSchema;
 import com.tool.config.AppConfig;
-import com.tool.logging.StructuredLogger;
+import com.tool.logging.Log;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.tool.output.ProgressReporter;
 import com.tool.output.SummaryPrinter;
 import com.tool.pipeline.MigrationStep;
@@ -12,6 +14,8 @@ import com.tool.pipeline.StepResult;
 import com.tool.schema.converter.SchemaConverter;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.writer.SchemaWriter;
+
+import static com.tool.common.SqlUtils.escapeBacktick;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -42,17 +46,16 @@ public class SchemaMigrateStep implements MigrationStep {
     private final SchemaExtractor extractor;
     private final SchemaConverter converter;
     private final SchemaWriter writer;
-    private final StructuredLogger log;
+    private static final Logger log = LoggerFactory.getLogger(SchemaMigrateStep.class);
     private final ProgressReporter progress;
 
     public SchemaMigrateStep(AppConfig config, SchemaExtractor extractor,
                              SchemaConverter converter, SchemaWriter writer,
-                             StructuredLogger log, ProgressReporter progress) {
+                             ProgressReporter progress) {
         this.config    = config;
         this.extractor = extractor;
         this.converter = converter;
         this.writer    = writer;
-        this.log       = log;
         this.progress  = progress;
     }
 
@@ -90,7 +93,7 @@ public class SchemaMigrateStep implements MigrationStep {
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
         }
-        log.log("INFO", "Found databases", "count", dbNames.size());
+        Log.info(log, "Found databases", "count", dbNames.size());
         progress.setDbNameWidth(dbNames.stream().mapToInt(String::length).max().orElse(8));
 
         int totalFailed = 0;
@@ -118,16 +121,16 @@ public class SchemaMigrateStep implements MigrationStep {
                 if (dr.stoppedEarly) {
                     progress.clear();
                     if (dr.conflictStop()) {
-                        log.log("ERROR", "Stopped early: table name conflict", "db", dbName);
+                        Log.error(log, "Stopped early: table name conflict", "db", dbName);
                     } else {
-                        log.log("WARN", "Stopped early (continueOnError=false)", "db", dbName);
+                        Log.warn(log, "Stopped early (continueOnError=false)", "db", dbName);
                     }
                     stoppedEarlyGlobal = true;
                     stoppedByConflict = dr.conflictStop();
                     break;
                 }
                 if (dryRun && dr.sqlFile() != null) {
-                    log.log("INFO", "Dry-run output written", "db", dbName, "file", dr.sqlFile().toString());
+                    Log.info(log, "Dry-run output written", "db", dbName, "file", dr.sqlFile().toString());
                 }
             }
         }
@@ -153,7 +156,7 @@ public class SchemaMigrateStep implements MigrationStep {
                                   boolean dropIfExists, boolean continueOnError,
                                   boolean dryRun) throws Exception {
         List<String[]> tableList = extractor.listTables(ssConn, databases, tables);
-        log.log("INFO", "Starting conversion", "db", dbName, "tables", tableList.size());
+        Log.info(log, "Starting conversion", "db", dbName, "tables", tableList.size());
 
         // Pre-check: table name conflicts across schemas
         Map<String, List<String>> nameToSchemas = new LinkedHashMap<>();
@@ -167,8 +170,8 @@ public class SchemaMigrateStep implements MigrationStep {
                 .toList();
         if (!conflicts.isEmpty()) {
             progress.clear();
-            log.log("ERROR", "Table name conflict", "db", dbName);
-            conflicts.forEach(line -> log.log("ERROR", "conflict", "tables", line));
+            Log.error(log, "Table name conflict", "db", dbName);
+            conflicts.forEach(line -> Log.error(log, "conflict", "tables", line));
             return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of(), null);
         }
 
@@ -212,22 +215,22 @@ public class SchemaMigrateStep implements MigrationStep {
 
             // Log per-table conversion result — tree style
             switch (result.getStatus()) {
-                case OK -> log.log("INFO", fullName, "status", "OK");
+                case OK -> Log.info(log, fullName, "status", "OK");
                 case WARN -> {
                     List<String> warnings = result.getWarnings();
-                    log.log("WARN", fullName, "status", "WARN (" + warnings.size() + ")");
+                    Log.warn(log, fullName, "status", "WARN (" + warnings.size() + ")");
                     for (int j = 0; j < warnings.size(); j++) {
                         String prefix = (j == warnings.size() - 1) ? "  └─ " : "  ├─ ";
-                        log.log("WARN", prefix + warnings.get(j));
+                        Log.warn(log, prefix + warnings.get(j));
                     }
                 }
                 case ERROR -> {
-                    log.log("ERROR", fullName, "status", "ERROR");
-                    log.log("ERROR", "  └─ " + result.getErrorMessage());
+                    Log.error(log, fullName, "status", "ERROR");
+                    Log.error(log, "  └─ " + result.getErrorMessage());
                 }
                 case SKIP -> {
-                    log.log("INFO", fullName, "status", "SKIP");
-                    log.log("INFO", "  └─ " + result.getErrorMessage());
+                    Log.info(log, fullName, "status", "SKIP");
+                    Log.info(log, "  └─ " + result.getErrorMessage());
                 }
             }
 
@@ -238,7 +241,7 @@ public class SchemaMigrateStep implements MigrationStep {
             progress.print(dbName, total, total, "");
         }
 
-        log.log("INFO", "Database complete", "db", dbName,
+        Log.info(log, "Database complete", "db", dbName,
                 "total", total, "ok", succeeded - warned, "warn", warned,
                 "error", failed, "skip", skipped);
 
@@ -265,7 +268,4 @@ public class SchemaMigrateStep implements MigrationStep {
         return conn;
     }
 
-    private static String escapeBacktick(String s) {
-        return s.replace("`", "``");
-    }
 }

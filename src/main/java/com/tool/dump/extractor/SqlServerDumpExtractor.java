@@ -1,5 +1,7 @@
 package com.tool.dump.extractor;
 
+import static com.tool.common.SqlUtils.escapeBracket;
+
 import com.tool.schema.extractor.SchemaExtractor;
 import org.springframework.stereotype.Component;
 
@@ -294,7 +296,4 @@ public class SqlServerDumpExtractor implements DumpExtractor {
         return new BigDecimal(val.toString());
     }
 
-    static String escapeBracket(String identifier) {
-        return identifier.replace("]", "]]");
-    }
 }

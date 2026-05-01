@@ -5,7 +5,9 @@ import com.tool.dump.extractor.DumpExtractor;
 import com.tool.dump.extractor.PkRange;
 import com.tool.dump.writer.CsvDumpWriter;
 import com.tool.dump.writer.DumpWriter;
-import com.tool.logging.StructuredLogger;
+import com.tool.logging.Log;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
@@ -61,17 +63,16 @@ public class DumpStep implements MigrationStep {
     private final DumpExtractor dumpExtractor;
     private final Supplier<DumpWriter> writerFactory;
     private final ConsistencyProvider consistency;
-    private final StructuredLogger log;
+    private static final Logger log = LoggerFactory.getLogger(DumpStep.class);
 
     public DumpStep(AppConfig config, SchemaExtractor schemaExtractor,
                     DumpExtractor dumpExtractor, Supplier<DumpWriter> writerFactory,
-                    ConsistencyProvider consistency, StructuredLogger log) {
+                    ConsistencyProvider consistency) {
         this.config          = config;
         this.schemaExtractor = schemaExtractor;
         this.dumpExtractor   = dumpExtractor;
         this.writerFactory   = writerFactory;
         this.consistency     = consistency;
-        this.log             = log;
     }
 
     @Override
@@ -110,7 +111,7 @@ public class DumpStep implements MigrationStep {
         int concurrency           = ctx.get("dumpConcurrency",      Integer.class);
 
         Path outputRoot = resolveOutputDir(outputDir);
-        log.log("INFO", "Dump started", "outputDir", outputRoot.toString(),
+        Log.info(log, "Dump started", "outputDir", outputRoot.toString(),
                 "mode", useSnapshot ? "snapshot" : "nolock");
 
         // Discover databases
@@ -123,7 +124,7 @@ public class DumpStep implements MigrationStep {
                 try { master.close(); } catch (Exception ignored) {}
             }
         } catch (Exception e) {
-            log.log("WARN", "Failed to list databases, no tables will be exported",
+            Log.warn(log, "Failed to list databases, no tables will be exported",
                     "error", e.getMessage());
             dbNames = List.of();
         }
@@ -168,7 +169,7 @@ public class DumpStep implements MigrationStep {
         long errors = allResults.stream().filter(DumpTableResult::isError).count();
         long totalFiles = allResults.stream().mapToLong(DumpTableResult::files).sum();
         long totalMs = System.currentTimeMillis() - dumpStartMs;
-        log.log("INFO", "Dump finished",
+        Log.info(log, "Dump finished",
                 "tables", allResults.size(),
                 "rows", totalRows,
                 "files", totalFiles,
@@ -212,7 +213,7 @@ public class DumpStep implements MigrationStep {
                 startLsnByDb.put(dbName, info.lsn());
                 allSnapNames.add(info.snapName());
             }
-            log.log("INFO", "Database snapshots created", "count", allSnapNames.size());
+            Log.info(log, "Database snapshots created", "count", allSnapNames.size());
 
             // 3. Discover all PK-range work items from snapshot databases
             List<PkRange> allRanges = new ArrayList<>();
@@ -235,7 +236,7 @@ public class DumpStep implements MigrationStep {
                 }
             }
 
-            log.log("INFO", "Dump work items computed",
+            Log.info(log, "Dump work items computed",
                     "totalChunks", allRanges.size(),
                     "concurrency", concurrency);
 
@@ -265,7 +266,7 @@ public class DumpStep implements MigrationStep {
                 DumpTableResult r = f.get();
                 if (r.isError()) {
                     allResults.add(r);
-                    log.log("ERROR", "Chunk dump failed",
+                    Log.error(log, "Chunk dump failed",
                             "table", r.schema() + "." + r.table(),
                             "error", r.error());
                 } else {
@@ -288,7 +289,7 @@ public class DumpStep implements MigrationStep {
                             agg.dbName(), agg.schema(), agg.table(),
                             agg.rows(), w.getFileCount(), agg.elapsedMs(), null);
                     tableAgg.put(entry.getKey(), result);
-                    log.log("INFO", "Table dump complete",
+                    Log.info(log, "Table dump complete",
                             "table", agg.schema() + "." + agg.table(),
                             "rows", agg.rows(), "files", w.getFileCount(),
                             "ms", agg.elapsedMs());
@@ -297,14 +298,14 @@ public class DumpStep implements MigrationStep {
             allResults.addAll(tableAgg.values());
 
         } catch (Exception e) {
-            log.log("ERROR", "Snapshot dump failed", "error", e.getMessage());
+            Log.error(log, "Snapshot dump failed", "error", e.getMessage());
         } finally {
             // 5. Drop all snapshots (best-effort)
             if (masterConn != null) {
                 try {
                     consistency.dropSnapshots(masterConn, allSnapNames);
                 } catch (Exception e) {
-                    log.log("WARN", "Failed to drop snapshots", "error", e.getMessage());
+                    Log.warn(log, "Failed to drop snapshots", "error", e.getMessage());
                 }
                 try { masterConn.close(); } catch (Exception ignored) {}
             }
@@ -340,7 +341,7 @@ public class DumpStep implements MigrationStep {
                     rowCount[0] += batch.rows().size();
                 });
                 long elapsed = System.currentTimeMillis() - start;
-                log.log("INFO", "Chunk dump complete",
+                Log.info(log, "Chunk dump complete",
                         "table", schema + "." + table,
                         "chunk", range.chunkIndex(),
                         "rows", rowCount[0], "ms", elapsed);
@@ -376,7 +377,7 @@ public class DumpStep implements MigrationStep {
                 try { dbConn.close(); } catch (Exception ignored) {}
             }
 
-            log.log("INFO", "Dumping database (nolock)", "db", dbName,
+            Log.info(log, "Dumping database (nolock)", "db", dbName,
                     "tables", tableList.size(), "concurrency", concurrency);
 
             ExecutorService pool = Executors.newFixedThreadPool(concurrency);
@@ -397,7 +398,7 @@ public class DumpStep implements MigrationStep {
                 allResults.add(f.get());
             }
         } catch (Exception e) {
-            log.log("ERROR", "Database dump failed", "db", dbName, "error", e.getMessage());
+            Log.error(log, "Database dump failed", "db", dbName, "error", e.getMessage());
         }
 
         return allResults;
@@ -428,7 +429,7 @@ public class DumpStep implements MigrationStep {
                 writer.close();
                 int files = writer.getFileCount();
                 long elapsed = System.currentTimeMillis() - start;
-                log.log("INFO", "Table dump complete",
+                Log.info(log, "Table dump complete",
                         "table", schema + "." + table,
                         "rows", rowCount[0], "files", files, "ms", elapsed);
                 return new DumpTableResult(dbName, schema, table,
@@ -439,7 +440,7 @@ public class DumpStep implements MigrationStep {
         } catch (Exception e) {
             try { writer.close(); } catch (Exception ignored) {}
             long elapsed = System.currentTimeMillis() - start;
-            log.log("ERROR", "Table dump failed",
+            Log.error(log, "Table dump failed",
                     "table", schema + "." + table, "error", e.getMessage());
             return new DumpTableResult(dbName, schema, table,
                     rowCount[0], 0, elapsed, e.getMessage());
@@ -469,7 +470,7 @@ public class DumpStep implements MigrationStep {
                 "}\n";
             java.nio.file.Files.writeString(metaFile, json, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
-            log.log("WARN", "Failed to write dump-meta.json", "error", e.getMessage());
+            Log.warn(log, "Failed to write dump-meta.json", "error", e.getMessage());
         }
     }
 

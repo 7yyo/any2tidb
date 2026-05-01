@@ -24,7 +24,7 @@ public record SnapshotConfig(
     public static final int DEFAULT_MAX_QUEUE_SIZE = 16384;
     public static final int DEFAULT_POLL_INTERVAL_MS = 500;
     public static final int DEFAULT_OFFSET_COMMIT_INTERVAL_MS = 10000;
-    public static final int DEFAULT_SNAPSHOT_MAX_THREADS = 1;
+    public static final int DEFAULT_SNAPSHOT_MAX_THREADS = 4;
     public static final double DEFAULT_SNAPSHOT_MAX_THREADS_MULTIPLIER = 1.0;
 
     public static SnapshotConfig defaults() {

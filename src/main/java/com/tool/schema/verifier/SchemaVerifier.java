@@ -1,5 +1,8 @@
 package com.tool.schema.verifier;
 
+import static com.tool.common.SqlUtils.escapeBracket;
+
+import com.tool.schema.converter.TypeMapper;
 import org.springframework.stereotype.Component;
 
 import java.sql.*;
@@ -7,6 +10,12 @@ import java.util.*;
 
 @Component
 public class SchemaVerifier {
+
+    private final TypeMapper typeMapper;
+
+    public SchemaVerifier(TypeMapper typeMapper) {
+        this.typeMapper = typeMapper;
+    }
 
     /**
      * 对比单张表在源端和 TiDB 中的 schema 指标。
@@ -266,10 +275,6 @@ public class SchemaVerifier {
         return results;
     }
 
-    private static String escapeBracket(String s) {
-        return s.replace("]", "]]");
-    }
-
     /**
      * 对源端 default_constraints.definition 做归一化，
      * 使其与 TiDB COLUMN_DEF 返回的格式尽量一致。
@@ -278,31 +283,17 @@ public class SchemaVerifier {
     private String normalizeDefault(String raw) {
         if (raw == null) return null;
         String v = raw.trim();
-        // 剥掉源端包裹的括号层
-        while (v.startsWith("(") && v.endsWith(")")) {
-            v = v.substring(1, v.length() - 1).trim();
-        }
-        // Unicode 字符串字面量：N'val' → val（N'DEV' → DEV，N'' → ""，N'''' → '）
+        // Unicode 字符串字面量：N'val' → val
         if (v.startsWith("N'") && v.endsWith("'") && v.length() >= 3) {
             String inner = v.substring(2, v.length() - 1);
             return inner.replace("''", "'");
         }
-        // 普通字符串字面量：源端保留引号 'val'，TiDB JDBC COLUMN_DEF 返回去引号后的裸值
-        // 例：SRC='' → TiDB="" ; SRC='CN' → TiDB=CN ; SRC='''' → TiDB='
+        // 普通字符串字面量：'val' → val（源端双写 '' 转义 → 单引号）
         if (v.startsWith("'") && v.endsWith("'")) {
             String inner = v.substring(1, v.length() - 1);
-            // Source escapes single-quotes by doubling them inside strings: '' → '
             return inner.replace("''", "'");
         }
-        // 函数映射（与 TypeMapper.mapDefaultValue 保持一致）
-        return switch (v.toUpperCase()) {
-            case "GETDATE()"           -> "CURRENT_TIMESTAMP";
-            case "GETUTCDATE()"        -> "UTC_TIMESTAMP()";
-            case "NEWID()"             -> "UUID()";
-            case "NEWSEQUENTIALID()"   -> "UUID()";
-            case "SYSDATETIME()"       -> "CURRENT_TIMESTAMP";
-            case "SYSDATETIMEOFFSET()" -> "CURRENT_TIMESTAMP";
-            default                    -> v;
-        };
+        // 括号剥离 + 函数映射委托给 TypeMapper
+        return typeMapper.mapDefaultValue(v);
     }
 }

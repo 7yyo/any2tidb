@@ -1,7 +1,9 @@
 package com.tool.snapshot;
 
 import com.tool.config.AppConfig;
-import com.tool.logging.StructuredLogger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.tool.logging.Log;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
@@ -22,7 +24,9 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,12 +40,11 @@ public class SnapshotStep implements MigrationStep {
 
     private final AppConfig config;
     private final DataSource targetDs;
-    private final StructuredLogger log;
+    private static final Logger log = LoggerFactory.getLogger(SnapshotStep.class);
 
-    public SnapshotStep(AppConfig config, DataSource targetDs, StructuredLogger log) {
+    public SnapshotStep(AppConfig config, DataSource targetDs) {
         this.config = config;
         this.targetDs = targetDs;
-        this.log = log;
     }
 
     @Override
@@ -86,7 +89,7 @@ public class SnapshotStep implements MigrationStep {
         } catch (Exception e) {
             return StepResult.fatal("Cannot connect to source database: " + e.getMessage());
         }
-        log.log("INFO", "database discovery", "count", dbNames.size());
+        Log.info(log, "database discovery", "count", dbNames.size(), "databases", dbNames);
 
         if (databases != null && !databases.isEmpty()) {
             dbNames = dbNames.stream().filter(databases::contains).toList();
@@ -114,7 +117,7 @@ public class SnapshotStep implements MigrationStep {
         }
 
         long totalMs = System.currentTimeMillis() - startMs;
-        log.log("INFO", "snapshot complete", "databases", dbResults.size(),
+        Log.info(log, "snapshot complete", "databases", dbResults.size(),
                 "rows", totalRows, "ms", totalMs);
 
         ctx.put("snapshotSummaries", dbResults);
@@ -139,12 +142,16 @@ public class SnapshotStep implements MigrationStep {
             List<String[]> tableList = discoverTables(conn, tables);
             CdcPreChecker.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
             if (cdcResult.hasError()) {
-                return new SnapshotDbResult(dbName, null, null, 0, 0L,
+                return new SnapshotDbResult(dbName, 0, 0L,
                         Instant.now(), cdcResult.errorMessage());
             }
 
             TiDBBatchWriter batchWriter = new TiDBBatchWriter(
-                    targetDs, new SinkRecordConverter(targetDs), snapshotConfig.batchInsertSize(), log);
+                    targetDs, new SinkRecordConverter(targetDs), snapshotConfig.batchInsertSize(),
+                    snapshotConfig.snapshotMaxThreads());
+            Map<String, Long> estimates = estimateRowCounts(conn, tableList);
+            batchWriter.setTableEstimates(estimates);
+            Log.info(log, "row estimates", "estimates", estimates.toString());
             SnapshotSink sink = new SnapshotSink(batchWriter);
 
             // Delete previous offset so snapshot always runs fresh
@@ -154,7 +161,7 @@ public class SnapshotStep implements MigrationStep {
             try { Files.deleteIfExists(historyFile); } catch (Exception ignored) {}
 
             DebeziumEngineFactory factory = new DebeziumEngineFactory(config.getSource());
-            log.log("INFO", "snapshot starting", "database", dbName, "tables", tableList.size());
+            Log.info(log, "snapshot starting", "database", dbName, "tables", tableList.size());
 
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> engineError = new AtomicReference<>();
@@ -163,6 +170,7 @@ public class SnapshotStep implements MigrationStep {
                     dbName, snapshotConfig, tableList, sink, done::countDown);
 
             ExecutorService executor = Executors.newSingleThreadExecutor();
+            long finalRows = 0L;
             try {
                 executor.submit(() -> {
                     try {
@@ -173,48 +181,58 @@ public class SnapshotStep implements MigrationStep {
                         done.countDown();
                     }
                 });
-                // Wait for snapshot data flow to finish, then close engine.
-                // Debezium 3.5 SQL Server connector loops in streaming phase even
-                // with initial_only, so we detect completion by data flow stalling.
-                long lastRows = 0;
-                long idleStartMs = 0;
+                // ORDERED guarantees "snapshot=last" arrives after all data.
+                // Poll isSnapshotComplete() — reliable signal, no idle timeout needed.
                 long startMs = System.currentTimeMillis();
-                while (!done.await(5, TimeUnit.SECONDS)) {
-                    long rows = batchWriter.getTotalRows();
-                    if (rows > 0 && rows == lastRows) {
-                        if (idleStartMs == 0) {
-                            idleStartMs = System.currentTimeMillis();
-                        } else if (System.currentTimeMillis() - idleStartMs > 15_000) {
-                            log.log("INFO", "snapshot finished",
-                                    "rows", rows);
-                            engine.close();
-                            break;
-                        }
-                    } else {
-                        idleStartMs = 0;
-                        lastRows = rows;
+                while (!done.await(2, TimeUnit.SECONDS)) {
+                    if (sink.isSnapshotComplete()) {
+                        long rows = batchWriter.getTotalRows();
+                        Log.info(log, "snapshot finished", "rows", rows);
+                        long tClose = System.currentTimeMillis();
+                        engine.close();
+                        Log.info(log, "engine.close() done", "ms", System.currentTimeMillis() - tClose);
+                        break;
                     }
                     if (System.currentTimeMillis() - startMs > TimeUnit.MINUTES.toMillis(ENGINE_TIMEOUT_MINUTES)) {
-                        return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
-                                tableList.size(), batchWriter.getTotalRows(), Instant.now(),
+                        return new SnapshotDbResult(dbName, tableList.size(),
+                                batchWriter.getTotalRows(), Instant.now(),
                                 "Snapshot timed out after " + ENGINE_TIMEOUT_MINUTES + " minutes");
                     }
                 }
                 if (engineError.get() != null) {
-                    return new SnapshotDbResult(dbName, null, null, 0, 0L,
+                    return new SnapshotDbResult(dbName, 0, 0L,
                             Instant.now(), "Engine error: " + engineError.get().getMessage());
                 }
             } finally {
+                long t0 = System.currentTimeMillis();
                 executor.shutdownNow();
-                executor.awaitTermination(1, TimeUnit.MINUTES);
+                executor.awaitTermination(5, TimeUnit.SECONDS);
+                long t1 = System.currentTimeMillis();
+                sink.logTableCounts();
+                finalRows = batchWriter.getTotalRows();
                 batchWriter.flushAll();
+                long t2 = System.currentTimeMillis();
+                Log.info(log, "snapshot shutdown", "db", dbName,
+                        "executorShutdownMs", t1 - t0, "flushMs", t2 - t1);
             }
 
-            return new SnapshotDbResult(dbName, sink.getCommitLsn(), sink.getChangeLsn(),
-                    tableList.size(), batchWriter.getTotalRows(), Instant.now(), null);
+            return new SnapshotDbResult(dbName, tableList.size(),
+                    finalRows, Instant.now(), null);
         } catch (Exception e) {
-            log.log("ERROR", "database snapshot error", "database", dbName, "error", e.getMessage());
-            return new SnapshotDbResult(dbName, null, null, 0, 0L,
+            Log.error(log, "database snapshot error", "database", dbName, "error", e.getMessage(),
+                    "exceptionType", e.getClass().getName());
+            // Log root cause
+            Throwable cause = e;
+            while (cause.getCause() != null && cause.getCause() != cause) {
+                cause = cause.getCause();
+            }
+            Log.error(log, "root cause", "type", cause.getClass().getName(), "message", cause.getMessage());
+            // Full stack trace as structured fields (one frame per field for greppability)
+            StackTraceElement[] frames = cause.getStackTrace();
+            for (int i = 0; i < Math.min(frames.length, 20); i++) {
+                Log.error(log, "stack", "frame", frames[i].toString());
+            }
+            return new SnapshotDbResult(dbName, 0, 0L,
                     Instant.now(), e.getMessage());
         }
     }
@@ -250,6 +268,42 @@ public class SnapshotStep implements MigrationStep {
         return tables;
     }
 
+    /**
+     * Fast approximate row counts via sys.dm_db_partition_stats.
+     * Returns map of {@code "table" → estimatedRows} (table name only, no schema).
+     */
+    private Map<String, Long> estimateRowCounts(Connection conn, List<String[]> tables) {
+        Map<String, Long> estimates = new HashMap<>();
+        if (tables.isEmpty()) return estimates;
+        // Group by schema, run one query per schema
+        var schemaGroups = new HashMap<String, List<String>>();
+        for (String[] t : tables) {
+            schemaGroups.computeIfAbsent(t[0], k -> new ArrayList<>()).add(t[1]);
+        }
+        for (var entry : schemaGroups.entrySet()) {
+            String schema = entry.getKey();
+            List<String> schemaTables = entry.getValue();
+            String inClause = schemaTables.stream().map(t -> "?").collect(Collectors.joining(","));
+            String sql = "SELECT t.name, SUM(p.row_count) FROM sys.tables t " +
+                         "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
+                         "JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id " +
+                         "WHERE p.index_id IN (0,1) AND s.name=? AND t.name IN (" + inClause + ") " +
+                         "GROUP BY t.name";
+            try (var ps = conn.prepareStatement(sql)) {
+                ps.setString(1, schema);
+                for (int i = 0; i < schemaTables.size(); i++) {
+                    ps.setString(i + 2, schemaTables.get(i));
+                }
+                try (var rs = ps.executeQuery()) {
+                    while (rs.next()) estimates.put(rs.getString(1), rs.getLong(2));
+                }
+            } catch (Exception e) {
+                Log.warn(log, "row estimate query failed", "schema", schema, "error", e.getMessage());
+            }
+        }
+        return estimates;
+    }
+
     private void writeSnapshotMeta(List<SnapshotDbResult> dbResults, long totalRows) {
         try {
             StringBuilder json = new StringBuilder();
@@ -261,8 +315,6 @@ public class SnapshotStep implements MigrationStep {
             for (int i = 0; i < dbResults.size(); i++) {
                 SnapshotDbResult db = dbResults.get(i);
                 json.append("    \"").append(db.dbName()).append("\": {\n");
-                json.append("      \"commitLsn\": ").append(db.commitLsn() != null ? "\"" + db.commitLsn() + "\"" : "null").append(",\n");
-                json.append("      \"changeLsn\": ").append(db.changeLsn() != null ? "\"" + db.changeLsn() + "\"" : "null").append(",\n");
                 json.append("      \"tables\": ").append(db.tables()).append(",\n");
                 json.append("      \"rows\": ").append(db.rows()).append("\n");
                 json.append("    }");
@@ -275,19 +327,18 @@ public class SnapshotStep implements MigrationStep {
             json.append("  \"totalTables\": ").append(totalTables).append("\n");
             json.append("}\n");
             Files.writeString(Path.of("snapshot-meta.json"), json);
-            log.log("INFO", "snapshot-meta.json written");
+            Log.info(log, "snapshot-meta.json written");
         } catch (Exception e) {
-            log.log("WARN", "failed to write snapshot-meta.json", "error", e.getMessage());
+            Log.warn(log, "failed to write snapshot-meta.json", "error", e.getMessage());
         }
     }
 
     private void printDbResult(String dbName, SnapshotDbResult r, long elapsedMs) {
         if (r.isError()) {
-            log.log("ERROR", "database snapshot failed", "database", dbName, "error", r.error());
+            Log.error(log, "database snapshot failed", "database", dbName, "error", r.error());
         } else {
-            log.log("INFO", "database snapshot done", "database", dbName,
-                    "tables", r.tables(), "rows", r.rows(), "ms", elapsedMs,
-                    "lsn", r.commitLsn() != null ? r.commitLsn() : "(none)");
+            Log.info(log, "database snapshot done", "database", dbName,
+                    "tables", r.tables(), "rows", r.rows(), "ms", elapsedMs);
         }
     }
 }

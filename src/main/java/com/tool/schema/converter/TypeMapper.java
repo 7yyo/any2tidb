@@ -43,8 +43,14 @@ public class TypeMapper {
             }
             case "real" -> MappedType.of("FLOAT");
             case "date" -> MappedType.of("DATE");
-            case "time" -> MappedType.of("TIME");
-            case "datetime", "smalldatetime" -> MappedType.of("DATETIME");
+            case "time" -> {
+                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 0;
+                yield fsp > 0 ? MappedType.of("TIME(" + fsp + ")") : MappedType.of("TIME");
+            }
+            case "datetime", "smalldatetime" -> {
+                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 0;
+                yield fsp > 0 ? MappedType.of("DATETIME(" + fsp + ")") : MappedType.of("DATETIME");
+            }
             case "datetime2" -> {
                 int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 6;
                 boolean truncated = scale != null && scale > 6;
@@ -53,7 +59,11 @@ public class TypeMapper {
                         ? MappedType.warn(tidbType, "DATETIME2(" + scale + ") converted to " + tidbType + " — fractional seconds truncated from " + scale + " to 6 digits")
                         : MappedType.of(tidbType);
             }
-            case "datetimeoffset" -> MappedType.warn("DATETIME", "DATETIMEOFFSET converted to DATETIME, timezone info lost");
+            case "datetimeoffset" -> {
+                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 0;
+                String dt = fsp > 0 ? "DATETIME(" + fsp + ")" : "DATETIME";
+                yield MappedType.warn(dt, "DATETIMEOFFSET converted to " + dt + ", timezone info lost");
+            }
             case "char" -> MappedType.of("CHAR(" + (len != null && len > 0 ? len : 1) + ")");
             case "varchar" -> mapVarchar(len, false);
             case "text" -> MappedType.warn("LONGTEXT", "TEXT converted to LONGTEXT");
@@ -74,7 +84,7 @@ public class TypeMapper {
             }
             case "image" -> MappedType.warn("LONGBLOB", "IMAGE converted to LONGBLOB (deprecated type)");
             case "uniqueidentifier" -> MappedType.warn("VARCHAR(36)", "UNIQUEIDENTIFIER converted to VARCHAR(36)");
-            case "rowversion", "timestamp" -> MappedType.warn("BIGINT UNSIGNED", "ROWVERSION/TIMESTAMP (row version) converted to BIGINT UNSIGNED");
+            case "rowversion", "timestamp" -> MappedType.warn("VARBINARY(8)", "ROWVERSION/TIMESTAMP (row version) converted to VARBINARY(8)");
             case "xml" -> MappedType.warn("LONGTEXT", "XML converted to LONGTEXT");
             case "json" -> MappedType.of("JSON");
             case "vector" -> MappedType.warn("VECTOR", "VECTOR requires TiDB v8.4+");
