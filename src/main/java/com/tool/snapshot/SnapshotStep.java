@@ -1,5 +1,6 @@
 package com.tool.snapshot;
 
+import com.tool.common.FilterUtils;
 import com.tool.config.AppConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,9 +93,7 @@ public class SnapshotStep implements MigrationStep {
         }
         Log.info(log, "database discovery", "count", dbNames.size(), "databases", dbNames);
 
-        if (databases != null && !databases.isEmpty()) {
-            dbNames = dbNames.stream().filter(databases::contains).toList();
-        }
+        dbNames = FilterUtils.filterNames(dbNames, databases);
         if (dbNames.isEmpty()) {
             return StepResult.ok("no databases to snapshot");
         }

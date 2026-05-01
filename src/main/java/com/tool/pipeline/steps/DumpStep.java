@@ -1,5 +1,6 @@
 package com.tool.pipeline.steps;
 
+import com.tool.common.FilterUtils;
 import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
 import com.tool.dump.extractor.PkRange;
@@ -136,9 +137,7 @@ public class DumpStep implements MigrationStep {
             dbNames = List.of();
         }
 
-        if (databases != null && !databases.isEmpty()) {
-            dbNames = dbNames.stream().filter(databases::contains).toList();
-        }
+        dbNames = FilterUtils.filterNames(dbNames, databases);
 
         String startTime = java.time.Instant.now().toString();
         Map<String, String> startLsnByDb = new LinkedHashMap<>();

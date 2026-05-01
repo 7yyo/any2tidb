@@ -13,6 +13,7 @@ import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.schema.converter.SchemaConverter;
 import com.tool.schema.extractor.SchemaExtractor;
+import com.tool.common.FilterUtils;
 import com.tool.schema.writer.SchemaWriter;
 import com.tool.source.SourceDriver;
 
@@ -96,9 +97,7 @@ public class SchemaMigrateStep implements MigrationStep {
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
         }
-        if (databases != null && !databases.isEmpty()) {
-            dbNames = dbNames.stream().filter(databases::contains).toList();
-        }
+        dbNames = FilterUtils.filterNames(dbNames, databases);
         Log.info(log, "Found databases", "count", dbNames.size());
         progress.setDbNameWidth(dbNames.stream().mapToInt(String::length).max().orElse(8));
 
