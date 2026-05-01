@@ -27,7 +27,7 @@ public class SqlServerDriver implements SourceDriver {
         this.dumpExtractor = dumpExtractor;
         this.typeMapper = typeMapper;
         this.verifier = verifier;
-        this.consistencyProvider = new DatabaseSnapshotManager(
+        this.consistencyProvider = new SqlServerConsistencyProvider(
                 config.getSource().getHost(),
                 config.getSource().getPort(),
                 config.getSource().getUsername(),

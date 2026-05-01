@@ -25,9 +25,9 @@ import java.util.*;
  * <p>Requires Enterprise or Developer edition. Uses sparse files (copy-on-write at
  * the data-page level) placed under {@code <outputDir>/snapshots/}.
  */
-public class DatabaseSnapshotManager implements ConsistencyProvider {
+public class SqlServerConsistencyProvider implements ConsistencyProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(DatabaseSnapshotManager.class);
+    private static final Logger log = LoggerFactory.getLogger(SqlServerConsistencyProvider.class);
     private static final String SNAP_SUFFIX = "_any2tidb_snap";
 
     private final String host;
@@ -35,7 +35,7 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
     private final String username;
     private final String password;
 
-    public DatabaseSnapshotManager(String host, int port, String username, String password) {
+    public SqlServerConsistencyProvider(String host, int port, String username, String password) {
         this.host = host;
         this.port = port;
         this.username = username;
