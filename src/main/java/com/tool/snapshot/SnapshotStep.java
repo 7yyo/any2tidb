@@ -25,7 +25,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -33,7 +32,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 
 public class SnapshotStep implements MigrationStep {
 
@@ -88,7 +86,7 @@ public class SnapshotStep implements MigrationStep {
                 config.getSource().jdbcUrl(),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
-            dbNames = discoverDatabases(master);
+            dbNames = sourceDriver.schemaExtractor().listDatabases(master);
         } catch (Exception e) {
             return StepResult.fatal("Cannot connect to source database: " + e.getMessage());
         }
@@ -142,7 +140,7 @@ public class SnapshotStep implements MigrationStep {
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
 
-            List<String[]> tableList = discoverTables(conn, tables);
+            List<String[]> tableList = sourceDriver.schemaExtractor().listTables(conn, tables);
             CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
             if (cdcResult.hasError()) {
                 return new SnapshotDbResult(dbName, 0, 0L,
@@ -152,7 +150,7 @@ public class SnapshotStep implements MigrationStep {
             TiDBBatchWriter batchWriter = new TiDBBatchWriter(
                     targetDs, new SinkRecordConverter(targetDs), snapshotConfig.batchInsertSize(),
                     snapshotConfig.snapshotMaxThreads());
-            Map<String, Long> estimates = estimateRowCounts(conn, tableList);
+            Map<String, Long> estimates = sourceDriver.schemaExtractor().estimateRowCounts(conn, tableList);
             batchWriter.setTableEstimates(estimates);
             Log.info(log, "row estimates", "database", dbName, "estimates", estimates.toString());
             SnapshotSink sink = new SnapshotSink(batchWriter);
@@ -240,73 +238,6 @@ public class SnapshotStep implements MigrationStep {
             return new SnapshotDbResult(dbName, 0, 0L,
                     Instant.now(), e.getMessage());
         }
-    }
-
-    private List<String> discoverDatabases(Connection conn) throws Exception {
-        List<String> dbs = new ArrayList<>();
-        try (var stmt = conn.createStatement();
-             var rs = stmt.executeQuery(
-                     "SELECT name FROM sys.databases WHERE name NOT IN ('master','tempdb','model','msdb') AND state_desc = 'ONLINE'")) {
-            while (rs.next()) dbs.add(rs.getString("name"));
-        }
-        return dbs;
-    }
-
-    private List<String[]> discoverTables(Connection conn, List<String> tableFilter) throws Exception {
-        List<String[]> tables = new ArrayList<>();
-        String sql = "SELECT s.name, t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id WHERE t.type = 'U' AND t.is_ms_shipped = 0 AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'cdc')";
-        if (tableFilter != null && !tableFilter.isEmpty()) {
-            String inClause = tableFilter.stream().map(t -> "?").collect(Collectors.joining(","));
-            sql += " AND t.name IN (" + inClause + ")";
-        }
-        sql += " ORDER BY s.name, t.name";
-        try (var ps = conn.prepareStatement(sql)) {
-            if (tableFilter != null) {
-                for (int i = 0; i < tableFilter.size(); i++) {
-                    ps.setString(i + 1, tableFilter.get(i));
-                }
-            }
-            try (var rs = ps.executeQuery()) {
-                while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2)});
-            }
-        }
-        return tables;
-    }
-
-    /**
-     * Fast approximate row counts via sys.dm_db_partition_stats.
-     * Returns map of {@code "table" → estimatedRows} (table name only, no schema).
-     */
-    private Map<String, Long> estimateRowCounts(Connection conn, List<String[]> tables) {
-        Map<String, Long> estimates = new HashMap<>();
-        if (tables.isEmpty()) return estimates;
-        // Group by schema, run one query per schema
-        var schemaGroups = new HashMap<String, List<String>>();
-        for (String[] t : tables) {
-            schemaGroups.computeIfAbsent(t[0], k -> new ArrayList<>()).add(t[1]);
-        }
-        for (var entry : schemaGroups.entrySet()) {
-            String schema = entry.getKey();
-            List<String> schemaTables = entry.getValue();
-            String inClause = schemaTables.stream().map(t -> "?").collect(Collectors.joining(","));
-            String sql = "SELECT t.name, SUM(p.row_count) FROM sys.tables t " +
-                         "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
-                         "JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id " +
-                         "WHERE p.index_id IN (0,1) AND s.name=? AND t.name IN (" + inClause + ") " +
-                         "GROUP BY t.name";
-            try (var ps = conn.prepareStatement(sql)) {
-                ps.setString(1, schema);
-                for (int i = 0; i < schemaTables.size(); i++) {
-                    ps.setString(i + 2, schemaTables.get(i));
-                }
-                try (var rs = ps.executeQuery()) {
-                    while (rs.next()) estimates.put(rs.getString(1), rs.getLong(2));
-                }
-            } catch (Exception e) {
-                Log.warn(log, "row estimate query failed", "schema", schema, "error", e.getMessage());
-            }
-        }
-        return estimates;
     }
 
     private void writeSnapshotMeta(List<SnapshotDbResult> dbResults, long totalRows) {
