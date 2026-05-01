@@ -325,7 +325,7 @@ public class App implements ApplicationRunner {
             List<String> tables    = parseListOption(args, "tables");
             DataSource targetDs = createTargetDataSource();
             try {
-                new SnapshotRunner(config, targetDs).run(args, databases, tables);
+                new SnapshotRunner(config, targetDs, driver).run(args, databases, tables);
             } finally {
                 closeDataSource(targetDs);
             }

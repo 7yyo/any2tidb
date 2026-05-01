@@ -7,7 +7,8 @@ import com.tool.logging.Log;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
-import com.tool.snapshot.cdc.CdcPreChecker;
+import com.tool.source.CdcProvider;
+import com.tool.source.SourceDriver;
 import com.tool.snapshot.engine.DebeziumEngineFactory;
 import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
@@ -40,11 +41,13 @@ public class SnapshotStep implements MigrationStep {
 
     private final AppConfig config;
     private final DataSource targetDs;
+    private final SourceDriver sourceDriver;
     private static final Logger log = LoggerFactory.getLogger(SnapshotStep.class);
 
-    public SnapshotStep(AppConfig config, DataSource targetDs) {
+    public SnapshotStep(AppConfig config, DataSource targetDs, SourceDriver sourceDriver) {
         this.config = config;
         this.targetDs = targetDs;
+        this.sourceDriver = sourceDriver;
     }
 
     @Override
@@ -98,7 +101,7 @@ public class SnapshotStep implements MigrationStep {
             return StepResult.ok("no databases to snapshot");
         }
 
-        CdcPreChecker cdcChecker = new CdcPreChecker(config.getSource());
+        CdcProvider cdcChecker = sourceDriver.cdcProvider();
         List<SnapshotDbResult> dbResults = new ArrayList<>();
         long totalRows = 0L;
         long startMs = System.currentTimeMillis();
@@ -131,7 +134,7 @@ public class SnapshotStep implements MigrationStep {
     }
 
     private SnapshotDbResult snapshotDatabase(String dbName, List<String> tables,
-                                               CdcPreChecker cdcChecker,
+                                               CdcProvider cdcChecker,
                                                SnapshotConfig snapshotConfig,
                                                boolean autoEnable) {
         try (Connection conn = DriverManager.getConnection(
@@ -140,7 +143,7 @@ public class SnapshotStep implements MigrationStep {
                 config.getSource().getPassword())) {
 
             List<String[]> tableList = discoverTables(conn, tables);
-            CdcPreChecker.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
+            CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
             if (cdcResult.hasError()) {
                 return new SnapshotDbResult(dbName, 0, 0L,
                         Instant.now(), cdcResult.errorMessage());

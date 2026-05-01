@@ -24,4 +24,5 @@ public interface SourceDriver {
     SqlServerTypeMapper typeMapper();
     SchemaVerifier verifier();
     ConsistencyProvider consistencyProvider();
+    CdcProvider cdcProvider();
 }

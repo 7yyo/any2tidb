@@ -9,6 +9,7 @@ import com.tool.pipeline.StepResult;
 import com.tool.pipeline.steps.PreCheckStep;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.snapshot.SnapshotStep;
+import com.tool.source.SourceDriver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -21,10 +22,12 @@ class SnapshotRunner {
 
     private final AppConfig config;
     private final DataSource targetDs;
+    private final SourceDriver sourceDriver;
 
-    SnapshotRunner(AppConfig config, DataSource targetDs) {
+    SnapshotRunner(AppConfig config, DataSource targetDs, SourceDriver sourceDriver) {
         this.config = config;
         this.targetDs = targetDs;
+        this.sourceDriver = sourceDriver;
     }
 
     void run(ApplicationArguments args, List<String> databases, List<String> tables) throws Exception {
@@ -63,7 +66,7 @@ class SnapshotRunner {
 
         List<MigrationStep> steps = new ArrayList<>();
         steps.add(new PreCheckStep(config));
-        steps.add(new SnapshotStep(config, targetDs));
+        steps.add(new SnapshotStep(config, targetDs, sourceDriver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);

@@ -1,4 +1,4 @@
-package com.tool.snapshot.cdc;
+package com.tool.source;
 
 import com.tool.config.AppConfig;
 import com.tool.logging.Log;
@@ -15,24 +15,16 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public class CdcPreChecker {
+public class SqlServerCdcProvider implements CdcProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(CdcPreChecker.class);
-
+    private static final Logger log = LoggerFactory.getLogger(SqlServerCdcProvider.class);
     private final AppConfig.DbConfig source;
 
-    public CdcPreChecker(AppConfig.DbConfig source) {
+    public SqlServerCdcProvider(AppConfig.DbConfig source) {
         this.source = source;
     }
 
-    public record CdcCheckResult(
-            boolean hasError,
-            String errorMessage,
-            boolean agentRunning,
-            boolean cdcEnabled,
-            List<String> tablesWithoutCdc
-    ) {}
-
+    @Override
     public boolean isAgentRunning(Connection conn) throws Exception {
         String sql = "SELECT 1 FROM sys.dm_exec_sessions WHERE program_name LIKE 'SQLAgent%' AND status = 'running'";
         try (PreparedStatement ps = conn.prepareStatement(sql);
@@ -41,6 +33,7 @@ public class CdcPreChecker {
         }
     }
 
+    @Override
     public boolean isCdcEnabled(Connection conn, String dbName) throws Exception {
         String sql = "SELECT is_cdc_enabled FROM sys.databases WHERE name = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -51,6 +44,7 @@ public class CdcPreChecker {
         }
     }
 
+    @Override
     public List<String> getTablesWithoutCdc(Connection conn, String dbName,
                                              List<String[]> tables) throws Exception {
         String sql = "SELECT s.name, t.name FROM cdc.change_tables ct " +
@@ -79,6 +73,7 @@ public class CdcPreChecker {
         }
     }
 
+    @Override
     public void enableCdc(Connection conn, String dbName) throws Exception {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("EXEC sys.sp_cdc_enable_db");
@@ -86,6 +81,7 @@ public class CdcPreChecker {
         }
     }
 
+    @Override
     public void enableCdcForTable(Connection conn, String dbName, String schema, String table) throws Exception {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
@@ -99,6 +95,7 @@ public class CdcPreChecker {
         return s.replace("'", "''");
     }
 
+    @Override
     public CdcCheckResult check(Connection conn, String dbName,
                                 List<String[]> tables, boolean autoEnable) {
         try {

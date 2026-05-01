@@ -17,6 +17,7 @@ public class SqlServerDriver implements SourceDriver {
     private final SqlServerTypeMapper typeMapper;
     private final SchemaVerifier verifier;
     private final ConsistencyProvider consistencyProvider;
+    private final CdcProvider cdcProvider;
 
     public SqlServerDriver(SchemaExtractor schemaExtractor,
                            DumpExtractor dumpExtractor,
@@ -32,6 +33,7 @@ public class SqlServerDriver implements SourceDriver {
                 config.getSource().getPort(),
                 config.getSource().getUsername(),
                 config.getSource().getPassword());
+        this.cdcProvider = new SqlServerCdcProvider(config.getSource());
     }
 
     @Override
@@ -56,4 +58,7 @@ public class SqlServerDriver implements SourceDriver {
 
     @Override
     public ConsistencyProvider consistencyProvider() { return consistencyProvider; }
+
+    @Override
+    public CdcProvider cdcProvider() { return cdcProvider; }
 }
