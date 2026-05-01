@@ -335,7 +335,7 @@ public class App implements ApplicationRunner {
         if ("sync".equals(mode)) {
             DataSource targetDs = createTargetDataSource();
             try {
-                new SyncRunner(config, targetDs).run(args);
+                new SyncRunner(config, targetDs, driver).run(args);
             } finally {
                 closeDataSource(targetDs);
             }

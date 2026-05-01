@@ -83,7 +83,7 @@ public class SnapshotStep implements MigrationStep {
 
         List<String> dbNames;
         try (Connection master = DriverManager.getConnection(
-                config.getSource().jdbcUrl(),
+                sourceDriver.buildJdbcUrl(config.getSource()),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
             dbNames = sourceDriver.schemaExtractor().listDatabases(master);
@@ -136,7 +136,7 @@ public class SnapshotStep implements MigrationStep {
                                                SnapshotConfig snapshotConfig,
                                                boolean autoEnable) {
         try (Connection conn = DriverManager.getConnection(
-                config.getSource().jdbcUrlTo(dbName),
+                sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
 

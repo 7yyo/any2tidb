@@ -14,6 +14,7 @@ import com.tool.pipeline.StepResult;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.source.ConsistencyProvider;
+import com.tool.source.SourceDriver;
 import static com.tool.source.sqlserver.SqlServerCdcUtils.captureLsn;
 import static com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium;
 import static com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset;
@@ -67,16 +68,18 @@ public class DumpStep implements MigrationStep {
     private final DumpExtractor dumpExtractor;
     private final Supplier<DumpWriter> writerFactory;
     private final ConsistencyProvider consistency;
+    private final SourceDriver sourceDriver;
     private static final Logger log = LoggerFactory.getLogger(DumpStep.class);
 
     public DumpStep(AppConfig config, SchemaExtractor schemaExtractor,
                     DumpExtractor dumpExtractor, Supplier<DumpWriter> writerFactory,
-                    ConsistencyProvider consistency) {
+                    ConsistencyProvider consistency, SourceDriver sourceDriver) {
         this.config          = config;
         this.schemaExtractor = schemaExtractor;
         this.dumpExtractor   = dumpExtractor;
         this.writerFactory   = writerFactory;
         this.consistency     = consistency;
+        this.sourceDriver    = sourceDriver;
     }
 
     @Override
@@ -93,7 +96,7 @@ public class DumpStep implements MigrationStep {
     public StepResult execute(StepContext ctx) throws Exception {
         return executeWithConnections(ctx, dbName ->
                 DriverManager.getConnection(
-                        config.getSource().jdbcUrlTo(dbName),
+                        sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
                         config.getSource().getUsername(),
                         config.getSource().getPassword()));
     }

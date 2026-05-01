@@ -66,7 +66,7 @@ class SchemaDumpRunner {
         ctx.put("continueOnError", continueOnError);
 
         List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, driver.consistencyProvider()));
+        steps.add(new PreCheckStep(config, driver));
 
         if (dumpMode) {
             boolean useSnapshot = parseConsistency(args);
@@ -86,11 +86,11 @@ class SchemaDumpRunner {
             long threshold = fileSizeMb <= 0
                     ? Long.MAX_VALUE : (long) fileSizeMb * 1024 * 1024;
             steps.add(new DumpStep(config, extractor, driver.dumpExtractor(),
-                    () -> new CsvDumpWriter(threshold), driver.consistencyProvider()));
+                    () -> new CsvDumpWriter(threshold), driver.consistencyProvider(), driver));
         } else {
             ProgressReporter progress = new ProgressReporter();
-            steps.add(new SchemaMigrateStep(config, extractor, converter, writer, progress));
-            steps.add(new VerifyStep(config, verifier));
+            steps.add(new SchemaMigrateStep(config, extractor, converter, writer, progress, driver));
+            steps.add(new VerifyStep(config, verifier, driver));
         }
 
         StepResult result = new MigrationPipeline(steps).run(ctx);

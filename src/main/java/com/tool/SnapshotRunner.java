@@ -65,7 +65,7 @@ class SnapshotRunner {
         if (schemaHistoryPath != null) ctx.put("schemaHistoryPath", schemaHistoryPath);
 
         List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config));
+        steps.add(new PreCheckStep(config, sourceDriver));
         steps.add(new SnapshotStep(config, targetDs, sourceDriver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);

@@ -11,6 +11,7 @@ import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
+import com.tool.source.SourceDriver;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 
@@ -38,11 +39,13 @@ public class SyncStep implements MigrationStep {
 
     private final AppConfig config;
     private final DataSource targetDs;
+    private final SourceDriver sourceDriver;
     private static final Logger log = LoggerFactory.getLogger(SyncStep.class);
 
-    public SyncStep(AppConfig config, DataSource targetDs) {
+    public SyncStep(AppConfig config, DataSource targetDs, SourceDriver sourceDriver) {
         this.config = config;
         this.targetDs = targetDs;
+        this.sourceDriver = sourceDriver;
     }
 
     @Override

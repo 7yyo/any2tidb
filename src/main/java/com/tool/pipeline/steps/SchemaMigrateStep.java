@@ -14,6 +14,7 @@ import com.tool.pipeline.StepResult;
 import com.tool.schema.converter.SchemaConverter;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.writer.SchemaWriter;
+import com.tool.source.SourceDriver;
 
 import static com.tool.common.SqlUtils.escapeBacktick;
 
@@ -46,17 +47,19 @@ public class SchemaMigrateStep implements MigrationStep {
     private final SchemaExtractor extractor;
     private final SchemaConverter converter;
     private final SchemaWriter writer;
+    private final SourceDriver sourceDriver;
     private static final Logger log = LoggerFactory.getLogger(SchemaMigrateStep.class);
     private final ProgressReporter progress;
 
     public SchemaMigrateStep(AppConfig config, SchemaExtractor extractor,
                              SchemaConverter converter, SchemaWriter writer,
-                             ProgressReporter progress) {
+                             ProgressReporter progress, SourceDriver sourceDriver) {
         this.config    = config;
         this.extractor = extractor;
         this.converter = converter;
         this.writer    = writer;
         this.progress  = progress;
+        this.sourceDriver = sourceDriver;
     }
 
     @Override
@@ -88,7 +91,7 @@ public class SchemaMigrateStep implements MigrationStep {
 
         List<String> dbNames;
         try (Connection masterConn = DriverManager.getConnection(
-                config.getSource().jdbcUrl(),
+                sourceDriver.buildJdbcUrl(config.getSource()),
                 config.getSource().getUsername(),
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
@@ -106,7 +109,7 @@ public class SchemaMigrateStep implements MigrationStep {
 
         for (String dbName : dbNames) {
             try (Connection ssConn = DriverManager.getConnection(
-                     config.getSource().jdbcUrlTo(dbName),
+                     sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
                      config.getSource().getUsername(),
                      config.getSource().getPassword());
                  Connection tidbConn = dryRun ? null : openTiDB(dbName)) {

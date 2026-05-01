@@ -11,6 +11,7 @@ import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.schema.verifier.SchemaVerifier;
 import com.tool.schema.verifier.VerifyResult;
+import com.tool.source.SourceDriver;
 
 import static com.tool.common.SqlUtils.escapeBacktick;
 
@@ -31,11 +32,13 @@ public class VerifyStep implements MigrationStep {
 
     private final AppConfig config;
     private final SchemaVerifier verifier;
+    private final SourceDriver sourceDriver;
     private static final Logger log = LoggerFactory.getLogger(VerifyStep.class);
 
-    public VerifyStep(AppConfig config, SchemaVerifier verifier) {
+    public VerifyStep(AppConfig config, SchemaVerifier verifier, SourceDriver sourceDriver) {
         this.config   = config;
         this.verifier = verifier;
+        this.sourceDriver = sourceDriver;
     }
 
     @Override
@@ -75,7 +78,7 @@ public class VerifyStep implements MigrationStep {
             Log.info(log, "VERIFY " + db.dbName(), "tables", succeededTables.size());
 
             try (Connection ssConn = DriverManager.getConnection(
-                         config.getSource().jdbcUrlTo(db.dbName()),
+                         sourceDriver.buildJdbcUrlTo(config.getSource(), db.dbName()),
                          config.getSource().getUsername(),
                          config.getSource().getPassword());
                  Connection tidbConn = openTiDB(db.dbName())) {

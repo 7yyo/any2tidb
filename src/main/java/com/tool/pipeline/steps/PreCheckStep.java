@@ -4,7 +4,7 @@ import com.tool.config.AppConfig;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
-import com.tool.source.ConsistencyProvider;
+import com.tool.source.SourceDriver;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -26,15 +26,11 @@ import java.sql.DriverManager;
 public class PreCheckStep implements MigrationStep {
 
     private final AppConfig config;
-    private final ConsistencyProvider consistency;
+    private final SourceDriver sourceDriver;
 
-    public PreCheckStep(AppConfig config) {
-        this(config, null);
-    }
-
-    public PreCheckStep(AppConfig config, ConsistencyProvider consistency) {
+    public PreCheckStep(AppConfig config, SourceDriver sourceDriver) {
         this.config = config;
-        this.consistency = consistency;
+        this.sourceDriver = sourceDriver;
     }
 
     @Override
@@ -75,12 +71,12 @@ public class PreCheckStep implements MigrationStep {
 
         // Edition check for consistency mode
         boolean useSnapshot = Boolean.TRUE.equals(ctx.get("dumpSnapshot", Boolean.class));
-        if (useSnapshot && consistency != null) {
+        if (useSnapshot && sourceDriver != null) {
             try (Connection c = DriverManager.getConnection(
-                    config.getSource().jdbcUrl(),
+                    sourceDriver.buildJdbcUrl(config.getSource()),
                     config.getSource().getUsername(),
                     config.getSource().getPassword())) {
-                consistency.checkPrerequisites(c);
+                sourceDriver.consistencyProvider().checkPrerequisites(c);
             } catch (Exception e) {
                 return StepResult.fatal(e.getMessage());
             }
@@ -94,7 +90,7 @@ public class PreCheckStep implements MigrationStep {
         try {
             DriverManager.setLoginTimeout(5);
             try (Connection c = DriverManager.getConnection(
-                    config.getSource().jdbcUrl(),
+                    sourceDriver.buildJdbcUrl(config.getSource()),
                     config.getSource().getUsername(),
                     config.getSource().getPassword())) {
                 // connection succeeded, nothing more needed

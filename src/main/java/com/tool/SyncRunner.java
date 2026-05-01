@@ -7,6 +7,7 @@ import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.pipeline.steps.PreCheckStep;
+import com.tool.source.SourceDriver;
 import com.tool.sync.SyncConfig;
 import com.tool.sync.SyncStep;
 import org.slf4j.Logger;
@@ -21,10 +22,12 @@ class SyncRunner {
 
     private final AppConfig config;
     private final DataSource targetDs;
+    private final SourceDriver sourceDriver;
 
-    SyncRunner(AppConfig config, DataSource targetDs) {
+    SyncRunner(AppConfig config, DataSource targetDs, SourceDriver sourceDriver) {
         this.config = config;
         this.targetDs = targetDs;
+        this.sourceDriver = sourceDriver;
     }
 
     void run(ApplicationArguments args) throws Exception {
@@ -54,8 +57,8 @@ class SyncRunner {
         ctx.put("syncConfig", syncConfig);
 
         List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config));
-        steps.add(new SyncStep(config, targetDs));
+        steps.add(new PreCheckStep(config, sourceDriver));
+        steps.add(new SyncStep(config, targetDs, sourceDriver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);
