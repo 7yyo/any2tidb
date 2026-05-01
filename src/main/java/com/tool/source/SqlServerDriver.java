@@ -73,4 +73,9 @@ public class SqlServerDriver implements SourceDriver {
         return String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
                 db.getHost(), db.getPort(), database);
     }
+
+    @Override
+    public String debeziumConnectorClass() {
+        return "io.debezium.connector.sqlserver.SqlServerConnector";
+    }
 }

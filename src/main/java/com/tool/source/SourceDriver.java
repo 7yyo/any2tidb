@@ -32,4 +32,7 @@ public interface SourceDriver {
 
     /** Build a JDBC URL targeting a specific database on the source. */
     String buildJdbcUrlTo(AppConfig.DbConfig db, String database);
+
+    /** Fully qualified Debezium connector class name for this source. */
+    String debeziumConnectorClass();
 }

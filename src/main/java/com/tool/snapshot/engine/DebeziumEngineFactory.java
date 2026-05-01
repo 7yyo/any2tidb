@@ -18,9 +18,11 @@ public class DebeziumEngineFactory {
     private static final Logger log = LoggerFactory.getLogger(DebeziumEngineFactory.class);
 
     private final AppConfig.DbConfig source;
+    private final String connectorClass;
 
-    public DebeziumEngineFactory(AppConfig.DbConfig source) {
+    public DebeziumEngineFactory(AppConfig.DbConfig source, String connectorClass) {
         this.source = source;
+        this.connectorClass = connectorClass;
     }
 
     public DebeziumEngine<ChangeEvent<String, String>> create(
@@ -32,7 +34,7 @@ public class DebeziumEngineFactory {
 
         Properties props = new Properties();
         props.setProperty("name", "any2tidb-snapshot-" + dbName);
-        props.setProperty("connector.class", "io.debezium.connector.sqlserver.SqlServerConnector");
+        props.setProperty("connector.class", connectorClass);
         props.setProperty("database.hostname", source.getHost());
         props.setProperty("database.port", String.valueOf(source.getPort()));
         props.setProperty("database.user", source.getUsername());

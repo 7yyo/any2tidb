@@ -109,7 +109,8 @@ public class SyncStep implements MigrationStep {
         // 4. Create writer and converter shared across all DB engines
         SinkRecordConverter converter = new SinkRecordConverter(targetDs);
         SyncWriter writer = new SyncWriter(converter);
-        SyncEngineFactory engineFactory = new SyncEngineFactory(config.getSource());
+        SyncEngineFactory engineFactory = new SyncEngineFactory(
+                config.getSource(), sourceDriver.debeziumConnectorClass());
 
         // 5. Launch one engine per database concurrently
         int dbCount = okDbs.size();
@@ -184,7 +185,8 @@ public class SyncStep implements MigrationStep {
      * from the pre-dump point.
      */
     private void ensureSchemaHistory(List<SnapshotDbResult> okDbs, SyncConfig cfg) {
-        SyncEngineFactory factory = new SyncEngineFactory(config.getSource());
+        SyncEngineFactory factory = new SyncEngineFactory(
+                config.getSource(), sourceDriver.debeziumConnectorClass());
         for (SnapshotDbResult db : okDbs) {
             String historyPath = cfg.schemaHistoryPath() + "/" + db.dbName() + ".history";
             if (new File(historyPath).exists()) continue;

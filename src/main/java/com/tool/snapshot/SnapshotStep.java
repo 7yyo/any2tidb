@@ -161,7 +161,8 @@ public class SnapshotStep implements MigrationStep {
             Path historyFile = Path.of(snapshotConfig.schemaHistoryPath(), dbName + ".history");
             try { Files.deleteIfExists(historyFile); } catch (Exception ignored) {}
 
-            DebeziumEngineFactory factory = new DebeziumEngineFactory(config.getSource());
+            DebeziumEngineFactory factory = new DebeziumEngineFactory(
+                    config.getSource(), sourceDriver.debeziumConnectorClass());
             Log.info(log, "snapshot starting", "database", dbName, "tables", tableList.size());
 
             CountDownLatch done = new CountDownLatch(1);

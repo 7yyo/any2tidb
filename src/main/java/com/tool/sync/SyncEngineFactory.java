@@ -15,10 +15,12 @@ import java.util.function.Consumer;
 public class SyncEngineFactory {
 
     private final AppConfig.DbConfig source;
+    private final String connectorClass;
     private static final Logger log = LoggerFactory.getLogger(SyncEngineFactory.class);
 
-    public SyncEngineFactory(AppConfig.DbConfig source) {
+    public SyncEngineFactory(AppConfig.DbConfig source, String connectorClass) {
         this.source = source;
+        this.connectorClass = connectorClass;
     }
 
     public DebeziumEngine<ChangeEvent<String, String>> create(
@@ -29,7 +31,7 @@ public class SyncEngineFactory {
 
         Properties props = new Properties();
         props.setProperty("name", "any2tidb-snapshot-" + dbName);
-        props.setProperty("connector.class", "io.debezium.connector.sqlserver.SqlServerConnector");
+        props.setProperty("connector.class", connectorClass);
         props.setProperty("database.hostname", source.getHost());
         props.setProperty("database.port", String.valueOf(source.getPort()));
         props.setProperty("database.user", source.getUsername());
