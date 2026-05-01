@@ -97,7 +97,16 @@ public class SchemaMigrateStep implements MigrationStep {
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
         }
+        int totalDbs = dbNames.size();
         dbNames = FilterUtils.filterNames(dbNames, databases);
+        if (databases != null && !databases.isEmpty()) {
+            Log.info(log, "Filtered databases", "before", totalDbs, "after", dbNames.size(),
+                    "filter", databases);
+            if (dbNames.isEmpty()) {
+                Log.warn(log, "--databases filter matched nothing, check spelling",
+                        "filter", databases);
+            }
+        }
         Log.info(log, "Found databases", "count", dbNames.size());
         progress.setDbNameWidth(dbNames.stream().mapToInt(String::length).max().orElse(8));
 

@@ -137,7 +137,16 @@ public class DumpStep implements MigrationStep {
             dbNames = List.of();
         }
 
+        int totalDbs = dbNames.size();
         dbNames = FilterUtils.filterNames(dbNames, databases);
+        if (databases != null && !databases.isEmpty()) {
+            Log.info(log, "Filtered databases", "before", totalDbs, "after", dbNames.size(),
+                    "filter", databases);
+            if (dbNames.isEmpty()) {
+                Log.warn(log, "--databases filter matched nothing, check spelling",
+                        "filter", databases);
+            }
+        }
 
         String startTime = java.time.Instant.now().toString();
         Map<String, String> startLsnByDb = new LinkedHashMap<>();

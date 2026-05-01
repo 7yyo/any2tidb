@@ -93,7 +93,16 @@ public class SnapshotStep implements MigrationStep {
         }
         Log.info(log, "database discovery", "count", dbNames.size(), "databases", dbNames);
 
+        int totalDbs = dbNames.size();
         dbNames = FilterUtils.filterNames(dbNames, databases);
+        if (databases != null && !databases.isEmpty()) {
+            Log.info(log, "Filtered databases", "before", totalDbs, "after", dbNames.size(),
+                    "filter", databases);
+            if (dbNames.isEmpty()) {
+                Log.warn(log, "--databases filter matched nothing, check spelling",
+                        "filter", databases);
+            }
+        }
         if (dbNames.isEmpty()) {
             return StepResult.ok("no databases to snapshot");
         }
