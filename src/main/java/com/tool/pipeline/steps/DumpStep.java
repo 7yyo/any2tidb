@@ -355,9 +355,7 @@ public class DumpStep implements MigrationStep {
 
         try {
             String snapDbName = snapMap.get(dbName);
-            String snapUrl = String.format(
-                    "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
-                    config.getSource().getHost(), config.getSource().getPort(), snapDbName);
+            String snapUrl = consistency.jdbcUrlForSnapshot(dbName, snapDbName);
             Connection snapConn = DriverManager.getConnection(snapUrl,
                     config.getSource().getUsername(), config.getSource().getPassword());
             try {
