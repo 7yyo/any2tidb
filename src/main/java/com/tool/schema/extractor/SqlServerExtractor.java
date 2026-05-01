@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 public class SqlServerExtractor implements SchemaExtractor {
@@ -55,6 +56,36 @@ public class SqlServerExtractor implements SchemaExtractor {
             }
         }
         return result;
+    }
+
+    @Override
+    public Map<String, Long> estimateRowCounts(Connection conn, List<String[]> tables) throws Exception {
+        Map<String, Long> estimates = new HashMap<>();
+        if (tables.isEmpty()) return estimates;
+        var schemaGroups = new HashMap<String, List<String>>();
+        for (String[] t : tables) {
+            schemaGroups.computeIfAbsent(t[0], k -> new ArrayList<>()).add(t[1]);
+        }
+        for (var entry : schemaGroups.entrySet()) {
+            String schema = entry.getKey();
+            List<String> schemaTables = entry.getValue();
+            String inClause = schemaTables.stream().map(t -> "?").collect(Collectors.joining(","));
+            String sql = "SELECT t.name, SUM(p.row_count) FROM sys.tables t " +
+                         "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
+                         "JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id " +
+                         "WHERE p.index_id IN (0,1) AND s.name=? AND t.name IN (" + inClause + ") " +
+                         "GROUP BY t.name";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, schema);
+                for (int i = 0; i < schemaTables.size(); i++) {
+                    ps.setString(i + 2, schemaTables.get(i));
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) estimates.put(rs.getString(1), rs.getLong(2));
+                }
+            }
+        }
+        return estimates;
     }
 
     public TableSchema extractTable(Connection conn, String schemaName, String tableName) throws Exception {

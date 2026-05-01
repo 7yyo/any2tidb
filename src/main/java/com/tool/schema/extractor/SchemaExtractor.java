@@ -4,6 +4,7 @@ import com.tool.common.model.TableSchema;
 
 import java.sql.Connection;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Source-agnostic contract for reading schema metadata.
@@ -24,6 +25,15 @@ public interface SchemaExtractor {
     /** List all tables across all user schemas, optionally filtered by table name. */
     default List<String[]> listTables(Connection conn, List<String> tables) throws Exception {
         return listTables(conn, null, tables);
+    }
+
+    /**
+     * Fast approximate row counts for the given tables.
+     * Returns map of {@code "tableName" → estimatedRows}.
+     * Default returns empty map (unavailable for this source).
+     */
+    default Map<String, Long> estimateRowCounts(Connection conn, List<String[]> tables) throws Exception {
+        return Map.of();
     }
 
     /** Extract full column + index metadata for one table. */
