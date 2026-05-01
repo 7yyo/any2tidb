@@ -61,4 +61,16 @@ public class SqlServerDriver implements SourceDriver {
 
     @Override
     public CdcProvider cdcProvider() { return cdcProvider; }
+
+    @Override
+    public String buildJdbcUrl(AppConfig.DbConfig db) {
+        return String.format("jdbc:sqlserver://%s:%d;encrypt=true;trustServerCertificate=true;loginTimeout=5",
+                db.getHost(), db.getPort());
+    }
+
+    @Override
+    public String buildJdbcUrlTo(AppConfig.DbConfig db, String database) {
+        return String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
+                db.getHost(), db.getPort(), database);
+    }
 }

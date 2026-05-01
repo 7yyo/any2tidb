@@ -1,5 +1,6 @@
 package com.tool.source;
 
+import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
 import com.tool.schema.converter.SqlServerTypeMapper;
 import com.tool.schema.extractor.SchemaExtractor;
@@ -25,4 +26,10 @@ public interface SourceDriver {
     SchemaVerifier verifier();
     ConsistencyProvider consistencyProvider();
     CdcProvider cdcProvider();
+
+    /** Build a JDBC URL to the source server (no specific database). */
+    String buildJdbcUrl(AppConfig.DbConfig db);
+
+    /** Build a JDBC URL targeting a specific database on the source. */
+    String buildJdbcUrlTo(AppConfig.DbConfig db, String database);
 }
