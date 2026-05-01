@@ -1,7 +1,9 @@
 package com.tool.source;
 
+import static com.tool.source.sqlserver.SqlServerCdcUtils.captureLsn;
 import static com.tool.common.SqlUtils.escapeBracket;
 
+import com.tool.logging.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,7 +67,7 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
                             "Detected: " + label + ". " +
                             "Consistent dump with parallelism is not available on this edition.");
                 }
-                log.info("Edition check passed  edition={}", edition == 3 ? "Enterprise" : "Developer");
+                Log.info(log, "Edition check passed", "edition", edition == 3 ? "Enterprise" : "Developer");
             } else {
                 throw new IllegalStateException("Cannot determine SQL Server edition");
             }
@@ -91,7 +93,7 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
                 created.add(snapName);
                 String lsn = ensureCdcAndCaptureLsn(dbName);
                 result.put(dbName, new SnapshotInfo(snapName, lsn));
-                log.info("Database snapshot created  source={}  snapshot={}  lsn={}", dbName, snapName, lsn);
+                Log.info(log, "Database snapshot created", "source", dbName, "snapshot", snapName, "lsn", lsn);
             }
         } catch (Exception e) {
             // Rollback: drop already-created snapshots
@@ -112,39 +114,7 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
      * @throws Exception if CDC cannot be enabled (fatal)
      */
     private String ensureCdcAndCaptureLsn(String dbName) throws Exception {
-        String url = String.format(
-                "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
-                host, port, dbName);
-        try (java.sql.Connection c = java.sql.DriverManager.getConnection(url, username, password)) {
-            // 1. Check if CDC is enabled at the database level
-            try (java.sql.Statement st = c.createStatement();
-                 java.sql.ResultSet rs = st.executeQuery(
-                         "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()")) {
-                if (rs.next() && rs.getInt(1) != 1) {
-                    log.info("CDC not enabled, auto-enabling  database={}", dbName);
-                    try (java.sql.Statement st2 = c.createStatement()) {
-                        st2.execute("EXEC sys.sp_cdc_enable_db");
-                    }
-                    log.info("CDC enabled  database={}", dbName);
-                }
-            }
-
-            // 2. Capture max LSN
-            try (java.sql.Statement st = c.createStatement();
-                 java.sql.ResultSet rs = st.executeQuery(
-                         "SELECT CONVERT(VARCHAR(MAX), sys.fn_cdc_get_max_lsn(), 1)")) {
-                if (rs.next()) {
-                    String lsn = rs.getString(1);
-                    if (lsn != null && !lsn.isBlank()) {
-                        return lsn;
-                    }
-                }
-            }
-        }
-        // Should not reach here if CDC was enabled successfully
-        throw new IllegalStateException(
-                "Failed to capture LSN for database '" + dbName +
-                "'. CDC may not be properly enabled. Verify sysadmin privileges.");
+        return captureLsn(host, port, username, password, dbName);
     }
 
     @Override
@@ -152,9 +122,9 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
         for (String snapName : snapshotIds) {
             try {
                 dropSnapshot(masterConn, snapName);
-                log.info("Database snapshot dropped  snapshot={}", snapName);
+                Log.info(log, "Database snapshot dropped", "snapshot", snapName);
             } catch (Exception e) {
-                log.warn("Failed to drop snapshot  snapshot={}  error={}", snapName, e.getMessage());
+                Log.warn(log, "Failed to drop snapshot", "snapshot", snapName, "error", e.getMessage());
             }
         }
     }
@@ -245,10 +215,9 @@ public class DatabaseSnapshotManager implements ConsistencyProvider {
         for (String snap : orphans) {
             try {
                 dropSnapshot(masterConn, snap);
-                log.info("Cleaned up orphan snapshot  snapshot={}", snap);
+                Log.info(log, "Cleaned up orphan snapshot", "snapshot", snap);
             } catch (Exception e) {
-                log.warn("Failed to clean orphan snapshot  snapshot={}  error={}",
-                        snap, e.getMessage());
+                Log.warn(log, "Failed to clean orphan snapshot", "snapshot", snap, "error", e.getMessage());
             }
         }
     }

@@ -151,7 +151,7 @@ public class SnapshotStep implements MigrationStep {
                     snapshotConfig.snapshotMaxThreads());
             Map<String, Long> estimates = estimateRowCounts(conn, tableList);
             batchWriter.setTableEstimates(estimates);
-            Log.info(log, "row estimates", "estimates", estimates.toString());
+            Log.info(log, "row estimates", "database", dbName, "estimates", estimates.toString());
             SnapshotSink sink = new SnapshotSink(batchWriter);
 
             // Delete previous offset so snapshot always runs fresh
@@ -187,10 +187,10 @@ public class SnapshotStep implements MigrationStep {
                 while (!done.await(2, TimeUnit.SECONDS)) {
                     if (sink.isSnapshotComplete()) {
                         long rows = batchWriter.getTotalRows();
-                        Log.info(log, "snapshot finished", "rows", rows);
+                        Log.info(log, "snapshot finished", "database", dbName, "rows", rows);
                         long tClose = System.currentTimeMillis();
                         engine.close();
-                        Log.info(log, "engine.close() done", "ms", System.currentTimeMillis() - tClose);
+                        Log.info(log, "engine.close() done", "database", dbName, "ms", System.currentTimeMillis() - tClose);
                         break;
                     }
                     if (System.currentTimeMillis() - startMs > TimeUnit.MINUTES.toMillis(ENGINE_TIMEOUT_MINUTES)) {
@@ -210,6 +210,8 @@ public class SnapshotStep implements MigrationStep {
                 long t1 = System.currentTimeMillis();
                 sink.logTableCounts();
                 finalRows = batchWriter.getTotalRows();
+                Log.info(log, "snapshot data loaded, flushing remaining writes",
+                        "database", dbName);
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
                 Log.info(log, "snapshot shutdown", "db", dbName,
@@ -226,11 +228,11 @@ public class SnapshotStep implements MigrationStep {
             while (cause.getCause() != null && cause.getCause() != cause) {
                 cause = cause.getCause();
             }
-            Log.error(log, "root cause", "type", cause.getClass().getName(), "message", cause.getMessage());
+            Log.error(log, "root cause", "database", dbName, "type", cause.getClass().getName(), "message", cause.getMessage());
             // Full stack trace as structured fields (one frame per field for greppability)
             StackTraceElement[] frames = cause.getStackTrace();
             for (int i = 0; i < Math.min(frames.length, 20); i++) {
-                Log.error(log, "stack", "frame", frames[i].toString());
+                Log.error(log, "stack", "database", dbName, "frame", frames[i].toString());
             }
             return new SnapshotDbResult(dbName, 0, 0L,
                     Instant.now(), e.getMessage());

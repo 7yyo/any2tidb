@@ -1,6 +1,7 @@
 package com.tool.snapshot.engine;
 
 import com.tool.config.AppConfig;
+import com.tool.logging.Log;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.snapshot.sink.SnapshotSink;
 import io.debezium.engine.ChangeEvent;
@@ -61,17 +62,19 @@ public class DebeziumEngineFactory {
         // all data events, so engine.run() return means everything is complete.
         // No need for idle-timeout polling or manual engine.close().
 
-        log.info("[\"creating debezium engine\"] [database={}] [snapshotMode={}] [tables={}]",
-                dbName, snapshotConfig.snapshotMode(), snapshotConfig.buildTableIncludeList(tableFilter));
+        Log.info(log, "creating debezium engine",
+                "database", dbName,
+                "snapshotMode", snapshotConfig.snapshotMode(),
+                "tables", snapshotConfig.buildTableIncludeList(tableFilter));
 
         return DebeziumEngine.create(Json.class)
                 .using(props)
                 .notifying(event -> sink.accept(List.of(event)))
                 .using((DebeziumEngine.CompletionCallback) (success, message, error) -> {
                     if (error != null) {
-                        log.error("[\"engine failed\"] [database={}] [error=\"{}\"]", dbName, error.getMessage());
+                        Log.error(log, "engine failed", "database", dbName, "error", error.getMessage());
                     } else {
-                        log.info("[\"engine completed\"] [database={}] [message=\"{}\"]", dbName, message);
+                        Log.info(log, "engine completed", "database", dbName, "message", message);
                     }
                     if (onComplete != null) onComplete.run();
                 })

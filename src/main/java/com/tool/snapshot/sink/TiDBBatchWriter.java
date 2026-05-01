@@ -325,6 +325,12 @@ public class TiDBBatchWriter {
 
     public long getTotalRows() { return totalRows.get(); }
 
+    public int getBufferedRows() {
+        int n = 0;
+        for (var list : buffer.values()) n += list.size();
+        return n;
+    }
+
     public Map<String, Long> getTableRows() { return new ConcurrentHashMap<>(tableRowCounts); }
 
     // ── formatting helpers ──────────────────────────────────────────────────

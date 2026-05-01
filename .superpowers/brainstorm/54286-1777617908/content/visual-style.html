@@ -1,0 +1,70 @@
+<h2>视觉风格选项</h2>
+<p class="subtitle">内部数据工具，不需要花哨。几个方向选一选</p>
+
+<div class="section">
+  <h3>整体调性</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="light" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Ant Design 默认浅色</h3>
+      <p>白底 + 蓝主色 (#1890FF)。数据工具标准风格，信息密度高，长时间操作不累眼。</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-body" style="background:#fff; padding:15px; border-radius:6px">
+          <div style="height:8px;width:60%;background:#1890ff;margin-bottom:10px;border-radius:2px"></div>
+          <div style="height:6px;width:100%;background:#f0f0f0;margin-bottom:6px;border-radius:2px"></div>
+          <div style="height:6px;width:80%;background:#f0f0f0;margin-bottom:6px;border-radius:2px"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <div style="padding:4px 12px;background:#1890ff;color:#fff;border-radius:4px;font-size:12px">启动</div>
+            <div style="padding:4px 12px;border:1px solid #d9d9d9;border-radius:4px;font-size:12px">取消</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="option" data-choice="dark" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>暗色主题</h3>
+      <p>终端风格，适合运维人员长期盯着看。但表格和表单可读性稍差。</p>
+      <div class="mockup" style="margin-top:12px">
+        <div class="mockup-body" style="background:#141414; padding:15px; border-radius:6px">
+          <div style="height:8px;width:60%;background:#177ddc;margin-bottom:10px;border-radius:2px"></div>
+          <div style="height:6px;width:100%;background:#303030;margin-bottom:6px;border-radius:2px"></div>
+          <div style="height:6px;width:80%;background:#303030;margin-bottom:6px;border-radius:2px"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <div style="padding:4px 12px;background:#177ddc;color:#fff;border-radius:4px;font-size:12px">启动</div>
+            <div style="padding:4px 12px;border:1px solid #434343;color:#ddd;border-radius:4px;font-size:12px">取消</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>布局密度</h3>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="compact" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>紧凑型</h3>
+      <p>表格行高小、边距窄，一屏展示更多数据。适合表结构预览、行计数统计等数据密集型页面。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="comfortable" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>舒适型</h3>
+      <p>标准间距，表单步骤清晰。适合配置向导、操作确认等交互密集型页面。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="subtitle">推荐：浅色 + 紧凑表格 + 舒适表单 — Ant Design 默认即可满足。内部工具不搞设计过度。</p>
+</div>

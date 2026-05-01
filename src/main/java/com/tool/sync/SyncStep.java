@@ -15,6 +15,8 @@ import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 
 import javax.sql.DataSource;
+import static com.tool.source.sqlserver.SqlServerCdcUtils.patchOffsetLsn;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.ObjectInputStream;
@@ -30,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class SyncStep implements MigrationStep {
 
@@ -93,6 +96,12 @@ public class SyncStep implements MigrationStep {
             return StepResult.fatal(
                     "Offset files not ready. Run snapshot first to generate them, then sync will resume from the snapshot point.");
         }
+
+        // 3b. Ensure schema history exists for each database. If a DB has an
+        // offset but no schema history (e.g. after a NOLOCK dump), run a quick
+        // schema_only snapshot to capture the table schemas, then restore the
+        // dump's LSN so CDC starts from the pre-dump point.
+        ensureSchemaHistory(okDbs, cfg);
 
         // 4. Create writer and converter shared across all DB engines
         SinkRecordConverter converter = new SinkRecordConverter(targetDs);
@@ -161,6 +170,76 @@ public class SyncStep implements MigrationStep {
             return StepResult.fatal(msg.toString());
         }
         return StepResult.ok("Sync stopped.");
+    }
+
+    // ── schema history auto-init ─────────────────────────────────────────────
+
+    /**
+     * For databases that have an offset file but no schema history (e.g. after a
+     * NOLOCK dump), run a quick Debezium {@code schema_only} snapshot to capture
+     * table schemas, then restore the original offset LSN so CDC streaming starts
+     * from the pre-dump point.
+     */
+    private void ensureSchemaHistory(List<SnapshotDbResult> okDbs, SyncConfig cfg) {
+        SyncEngineFactory factory = new SyncEngineFactory(config.getSource());
+        for (SnapshotDbResult db : okDbs) {
+            String historyPath = cfg.schemaHistoryPath() + "/" + db.dbName() + ".history";
+            if (new File(historyPath).exists()) continue;
+
+            String offsetPath = cfg.offsetStoragePath() + "/" + db.dbName() + ".offset";
+            OffsetInfo dumpOffset = readOffsetInfo(offsetPath, db.dbName());
+            String dumpLsn = dumpOffset != null ? dumpOffset.commitLsn : null;
+
+            Log.info(log, "schema history not found, running schema_only",
+                    "database", db.dbName(),
+                    "dumpLsn", dumpLsn != null ? dumpLsn : "?");
+
+            try {
+                SyncConfig schemaCfg = cfg.withSnapshotMode("schema_only");
+                DebeziumEngine.ChangeConsumer<ChangeEvent<String, String>> noopConsumer =
+                        (records, committer) -> {
+                            for (ChangeEvent<String, String> r : records) {
+                                committer.markProcessed(r);
+                            }
+                            committer.markBatchFinished();
+                        };
+                DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
+                        db.dbName(), schemaCfg, noopConsumer, error -> {});
+                CountDownLatch done = new CountDownLatch(1);
+                AtomicReference<Throwable> engineError = new AtomicReference<>();
+                ExecutorService exec = Executors.newSingleThreadExecutor();
+                exec.submit(() -> {
+                    try { engine.run(); }
+                    catch (Throwable t) { engineError.set(t); }
+                    finally { done.countDown(); }
+                });
+                done.await();
+                exec.shutdownNow();
+                exec.awaitTermination(5, TimeUnit.SECONDS);
+
+                if (engineError.get() != null) {
+                    Log.error(log, "schema_only failed", "database", db.dbName(),
+                            "error", engineError.get().getMessage());
+                    continue;
+                }
+                Log.info(log, "schema_only complete", "database", db.dbName());
+            } catch (Exception e) {
+                Log.error(log, "schema_only failed", "database", db.dbName(),
+                        "error", e.getMessage());
+                continue;
+            }
+
+            // Patch offset — schema_only wrote current LSN, restore dump's LSN
+            // Use patchOffsetLsn to preserve all other Debezium-written fields
+            if (dumpLsn != null) {
+                try {
+                    patchOffsetLsn(offsetPath, db.dbName(), dumpLsn);
+                } catch (Exception e) {
+                    Log.warn(log, "failed to patch offset LSN",
+                            "database", db.dbName(), "error", e.getMessage());
+                }
+            }
+        }
     }
 
     // ── offset file reading ──────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import io.debezium.engine.format.Json;
 
+import java.util.List;
 import java.util.Properties;
 import java.util.function.Consumer;
 
@@ -23,7 +24,7 @@ public class SyncEngineFactory {
     public DebeziumEngine<ChangeEvent<String, String>> create(
             String dbName,
             SyncConfig syncConfig,
-            SyncSink changeConsumer,
+            DebeziumEngine.ChangeConsumer<ChangeEvent<String, String>> changeConsumer,
             Consumer<Throwable> onComplete) {
 
         Properties props = new Properties();
@@ -43,8 +44,11 @@ public class SyncEngineFactory {
                 syncConfig.schemaHistoryPath() + "/" + dbName + ".history");
         props.setProperty("offset.storage.file.filename",
                 syncConfig.offsetStoragePath() + "/" + dbName + ".offset");
-        // Do NOT set snapshot.mode — default "initial" reads existing offset
-        // and skips snapshot since it was already completed
+        // Default "initial" reads existing offset and skips snapshot since it was already completed.
+        // schema_only runs a quick schema capture without data transfer.
+        if (syncConfig.snapshotMode() != null) {
+            props.setProperty("snapshot.mode", syncConfig.snapshotMode());
+        }
         props.setProperty("table.include.list", ".*\\..*");
         props.setProperty("max.queue.size", "16384");
         props.setProperty("poll.interval.ms", String.valueOf(syncConfig.pollIntervalMs()));

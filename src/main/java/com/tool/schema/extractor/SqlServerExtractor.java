@@ -27,10 +27,10 @@ public class SqlServerExtractor implements SchemaExtractor {
     }
 
     /**
-     * List all tables in the given databases (or all if databasesFilter is empty/null).
+     * List all tables in the given databases (or all if schemas is empty/null).
      * Returns list of [schemaName, tableName] pairs.
      */
-    public List<String[]> listTables(Connection conn, List<String> databasesFilter, List<String> tablesFilter) throws Exception {
+    public List<String[]> listTables(Connection conn, List<String> schemas, List<String> tablesFilter) throws Exception {
         List<String[]> result = new ArrayList<>();
         StringBuilder sql = new StringBuilder(
             "SELECT s.name AS schema_name, t.name AS table_name " +
@@ -38,8 +38,8 @@ public class SqlServerExtractor implements SchemaExtractor {
             "WHERE t.type = 'U' AND t.is_ms_shipped = 0 " +
             "AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'cdc')"
         );
-        if (databasesFilter != null && !databasesFilter.isEmpty()) {
-            sql.append(" AND s.name IN (").append(placeholders(databasesFilter.size())).append(")");
+        if (schemas != null && !schemas.isEmpty()) {
+            sql.append(" AND s.name IN (").append(placeholders(schemas.size())).append(")");
         }
         if (tablesFilter != null && !tablesFilter.isEmpty()) {
             sql.append(" AND t.name IN (").append(placeholders(tablesFilter.size())).append(")");
@@ -48,7 +48,7 @@ public class SqlServerExtractor implements SchemaExtractor {
 
         try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             int idx = 1;
-            if (databasesFilter != null) for (String s : databasesFilter) ps.setString(idx++, s);
+            if (schemas != null) for (String s : schemas) ps.setString(idx++, s);
             if (tablesFilter != null) for (String t : tablesFilter) ps.setString(idx++, t);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) result.add(new String[]{rs.getString("schema_name"), rs.getString("table_name")});

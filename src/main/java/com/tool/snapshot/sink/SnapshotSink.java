@@ -23,13 +23,14 @@ public class SnapshotSink {
 
     public void accept(List<ChangeEvent<String, String>> events) {
         for (ChangeEvent<String, String> event : events) {
+            SnapshotJsonParser.ParsedRecord record = null;
             try {
                 String json = event.value();
                 if (json == null) {
                     Log.debug(log, "debezium event skipped", "reason", "null value");
                     continue;
                 }
-                SnapshotJsonParser.ParsedRecord record = parser.parse(json);
+                record = parser.parse(json);
 
                 // "last" = overall snapshot done; "last_in_data_collection" = per-table done
                 // These events carry the last row data — accumulate first, then signal completion
@@ -72,7 +73,8 @@ public class SnapshotSink {
                     snapshotComplete = true;
                 }
             } catch (Exception e) {
-                Log.warn(log, "record failed", "error", e.getMessage());
+                String table = record != null ? fullName(record) : "?";
+                Log.warn(log, "record failed", "table", table, "error", e.getMessage());
             }
         }
     }

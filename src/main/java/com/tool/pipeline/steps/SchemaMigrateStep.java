@@ -93,6 +93,9 @@ public class SchemaMigrateStep implements MigrationStep {
                 config.getSource().getPassword())) {
             dbNames = extractor.listDatabases(masterConn);
         }
+        if (databases != null && !databases.isEmpty()) {
+            dbNames = dbNames.stream().filter(databases::contains).toList();
+        }
         Log.info(log, "Found databases", "count", dbNames.size());
         progress.setDbNameWidth(dbNames.stream().mapToInt(String::length).max().orElse(8));
 
@@ -155,7 +158,7 @@ public class SchemaMigrateStep implements MigrationStep {
                                   String dbName, List<String> databases, List<String> tables,
                                   boolean dropIfExists, boolean continueOnError,
                                   boolean dryRun) throws Exception {
-        List<String[]> tableList = extractor.listTables(ssConn, databases, tables);
+        List<String[]> tableList = extractor.listTables(ssConn, tables);
         Log.info(log, "Starting conversion", "db", dbName, "tables", tableList.size());
 
         // Pre-check: table name conflicts across schemas

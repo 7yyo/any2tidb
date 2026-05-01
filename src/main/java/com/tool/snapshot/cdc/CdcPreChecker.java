@@ -1,6 +1,7 @@
 package com.tool.snapshot.cdc;
 
 import com.tool.config.AppConfig;
+import com.tool.logging.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,7 +82,7 @@ public class CdcPreChecker {
     public void enableCdc(Connection conn, String dbName) throws Exception {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("EXEC sys.sp_cdc_enable_db");
-            log.info("[\"cdc enabled\"] [database={}]", dbName);
+            Log.info(log, "cdc enabled", "database", dbName);
         }
     }
 
@@ -90,7 +91,7 @@ public class CdcPreChecker {
             stmt.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
                     + "', @source_name = '" + escapeQuote(table)
                     + "', @role_name = NULL");
-            log.info("[\"cdc enabled\"] [database={}] [table={}.{}]", dbName, schema, table);
+            Log.info(log, "cdc enabled for table", "database", dbName, "table", schema + "." + table);
         }
     }
 
@@ -103,7 +104,7 @@ public class CdcPreChecker {
         try {
             boolean agentRunning = isAgentRunning(conn);
             if (!agentRunning) {
-                log.warn("[\"SQL Server Agent is not running (not required for Debezium)\"]");
+                Log.warn(log, "SQL Server Agent is not running (not required for Debezium)");
             }
 
             boolean cdcEnabled = isCdcEnabled(conn, dbName);

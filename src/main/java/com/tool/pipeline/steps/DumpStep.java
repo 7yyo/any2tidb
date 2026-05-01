@@ -12,7 +12,11 @@ import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.schema.extractor.SchemaExtractor;
+import com.tool.snapshot.SnapshotConfig;
 import com.tool.source.ConsistencyProvider;
+import static com.tool.source.sqlserver.SqlServerCdcUtils.captureLsn;
+import static com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium;
+import static com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset;
 
 import java.nio.file.Path;
 import java.sql.*;
@@ -129,6 +133,10 @@ public class DumpStep implements MigrationStep {
             dbNames = List.of();
         }
 
+        if (databases != null && !databases.isEmpty()) {
+            dbNames = dbNames.stream().filter(databases::contains).toList();
+        }
+
         String startTime = java.time.Instant.now().toString();
         Map<String, String> startLsnByDb = new LinkedHashMap<>();
 
@@ -142,17 +150,29 @@ public class DumpStep implements MigrationStep {
         if (useSnapshot) {
             // Database Snapshot mode: consistent, parallel inter-table + intra-table
             allResults = dumpWithSnapshots(ctx, connFactory, dbNames,
-                    databases, tables, chunkSize, threshold, concurrency, outputRoot,
+                    tables, chunkSize, threshold, concurrency, outputRoot,
                     startLsnByDb);
             for (DumpTableResult r : allResults) {
                 totalRows += r.rows();
             }
         } else {
-            // Parallel per-table, no consistency (unchanged)
+            // Parallel per-table, no consistency
             concurrency = Math.max(1, concurrency);
             for (String dbName : dbNames) {
+                // Capture CDC LSN before dump for sync continuity
+                try {
+                    String lsn = captureLsn(
+                            config.getSource().getHost(), config.getSource().getPort(),
+                            config.getSource().getUsername(), config.getSource().getPassword(),
+                            dbName);
+                    startLsnByDb.put(dbName, lsn);
+                    Log.info(log, "CDC LSN captured", "database", dbName, "lsn", lsn);
+                } catch (Exception e) {
+                    Log.warn(log, "CDC LSN capture failed, sync from this point will not be possible",
+                            "database", dbName, "error", e.getMessage());
+                }
                 List<DumpTableResult> dbResults = dumpDbParallel(connFactory, dbName,
-                        databases, tables, chunkSize, outputRoot, nolock, concurrency);
+                        tables, chunkSize, outputRoot, nolock, concurrency);
                 for (DumpTableResult r : dbResults) {
                     allResults.add(r);
                     totalRows += r.rows();
@@ -161,6 +181,8 @@ public class DumpStep implements MigrationStep {
         }
 
         writeDumpMeta(outputRoot, startLsnByDb, startTime, dbNames, useSnapshot);
+        // Write Debezium offset files for sync continuity from NOLOCK dumps
+        writeOffsetsForSync(outputRoot, startLsnByDb);
 
         ctx.put("dumpSummaries",    allResults);
         ctx.put("dumpTotalRows",    totalRows);
@@ -185,7 +207,6 @@ public class DumpStep implements MigrationStep {
     private List<DumpTableResult> dumpWithSnapshots(StepContext ctx,
                                                      ConnectionFactory connFactory,
                                                      List<String> dbNames,
-                                                     List<String> databasesFilter,
                                                      List<String> tablesFilter,
                                                      int chunkSize,
                                                      long threshold,
@@ -225,7 +246,7 @@ public class DumpStep implements MigrationStep {
                 try (Connection snapConn = DriverManager.getConnection(snapUrl,
                         config.getSource().getUsername(), config.getSource().getPassword())) {
                     List<String[]> tableList = schemaExtractor.listTables(snapConn,
-                            databasesFilter, tablesFilter);
+                            tablesFilter);
                     for (String[] entry : tableList) {
                         String schema = entry[0];
                         String table = entry[1];
@@ -267,6 +288,7 @@ public class DumpStep implements MigrationStep {
                 if (r.isError()) {
                     allResults.add(r);
                     Log.error(log, "Chunk dump failed",
+                            "database", r.dbName(),
                             "table", r.schema() + "." + r.table(),
                             "error", r.error());
                 } else {
@@ -290,6 +312,7 @@ public class DumpStep implements MigrationStep {
                             agg.rows(), w.getFileCount(), agg.elapsedMs(), null);
                     tableAgg.put(entry.getKey(), result);
                     Log.info(log, "Table dump complete",
+                            "database", agg.dbName(),
                             "table", agg.schema() + "." + agg.table(),
                             "rows", agg.rows(), "files", w.getFileCount(),
                             "ms", agg.elapsedMs());
@@ -298,7 +321,7 @@ public class DumpStep implements MigrationStep {
             allResults.addAll(tableAgg.values());
 
         } catch (Exception e) {
-            Log.error(log, "Snapshot dump failed", "error", e.getMessage());
+            Log.error(log, "Snapshot dump failed", "databases", dbNames, "error", e.getMessage());
         } finally {
             // 5. Drop all snapshots (best-effort)
             if (masterConn != null) {
@@ -342,6 +365,7 @@ public class DumpStep implements MigrationStep {
                 });
                 long elapsed = System.currentTimeMillis() - start;
                 Log.info(log, "Chunk dump complete",
+                        "database", dbName,
                         "table", schema + "." + table,
                         "chunk", range.chunkIndex(),
                         "rows", rowCount[0], "ms", elapsed);
@@ -360,7 +384,6 @@ public class DumpStep implements MigrationStep {
 
     private List<DumpTableResult> dumpDbParallel(ConnectionFactory connFactory,
                                                   String dbName,
-                                                  List<String> databases,
                                                   List<String> tables,
                                                   int chunkSize,
                                                   Path outputRoot,
@@ -372,7 +395,7 @@ public class DumpStep implements MigrationStep {
             Connection dbConn = connFactory.apply(dbName);
             List<String[]> tableList;
             try {
-                tableList = schemaExtractor.listTables(dbConn, databases, tables);
+                tableList = schemaExtractor.listTables(dbConn, tables);
             } finally {
                 try { dbConn.close(); } catch (Exception ignored) {}
             }
@@ -430,6 +453,7 @@ public class DumpStep implements MigrationStep {
                 int files = writer.getFileCount();
                 long elapsed = System.currentTimeMillis() - start;
                 Log.info(log, "Table dump complete",
+                        "database", dbName,
                         "table", schema + "." + table,
                         "rows", rowCount[0], "files", files, "ms", elapsed);
                 return new DumpTableResult(dbName, schema, table,
@@ -441,6 +465,7 @@ public class DumpStep implements MigrationStep {
             try { writer.close(); } catch (Exception ignored) {}
             long elapsed = System.currentTimeMillis() - start;
             Log.error(log, "Table dump failed",
+                    "database", dbName,
                     "table", schema + "." + table, "error", e.getMessage());
             return new DumpTableResult(dbName, schema, table,
                     rowCount[0], 0, elapsed, e.getMessage());
@@ -471,6 +496,29 @@ public class DumpStep implements MigrationStep {
             java.nio.file.Files.writeString(metaFile, json, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
             Log.warn(log, "Failed to write dump-meta.json", "error", e.getMessage());
+        }
+    }
+
+    /**
+     * Write Debezium-compatible offset files for each database that had LSN captured.
+     * Uses the same default directory as SnapshotStep ({@value SnapshotConfig#DEFAULT_OFFSET_STORAGE_PATH})
+     * so both dump and snapshot modes share a single offset location for sync.
+     */
+    private void writeOffsetsForSync(Path outputRoot, Map<String, String> startLsnByDb) {
+        Path offsetDir = Path.of(SnapshotConfig.DEFAULT_OFFSET_STORAGE_PATH);
+        for (var entry : startLsnByDb.entrySet()) {
+            String dbName = entry.getKey();
+            String hexLsn = entry.getValue();
+            try {
+                String debeziumLsn = hexLsnToDebezium(hexLsn);
+                String path = offsetDir.resolve(dbName + ".offset").toString();
+                writeDebeziumOffset(path, dbName, debeziumLsn);
+                Log.info(log, "Debezium offset written", "database", dbName,
+                        "path", path, "lsn", debeziumLsn);
+            } catch (Exception e) {
+                Log.warn(log, "Failed to write Debezium offset", "database", dbName,
+                        "error", e.getMessage());
+            }
         }
     }
 

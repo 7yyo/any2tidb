@@ -6,7 +6,8 @@
             <pattern>[%d{yyyy/MM/dd HH:mm:ss.SSS Z}] [%level] %msg%n</pattern>
         </encoder>
     </appender>
-    <root level="INFO">
+    <root level="OFF" />
+    <logger name="com.tool" level="INFO" additivity="false">
         <appender-ref ref="FILE" />
-    </root>
+    </logger>
 </configuration>

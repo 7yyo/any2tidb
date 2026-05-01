@@ -17,9 +17,14 @@ public interface SchemaExtractor {
     /**
      * List tables matching the given schema/name filters.
      * Each entry is a two-element array: [schemaName, tableName].
-     * Empty lists mean "no filter" (return all).
+     * null or empty lists mean "no filter" (return all).
      */
-    List<String[]> listTables(Connection conn, List<String> databases, List<String> tables) throws Exception;
+    List<String[]> listTables(Connection conn, List<String> schemas, List<String> tables) throws Exception;
+
+    /** List all tables across all user schemas, optionally filtered by table name. */
+    default List<String[]> listTables(Connection conn, List<String> tables) throws Exception {
+        return listTables(conn, null, tables);
+    }
 
     /** Extract full column + index metadata for one table. */
     TableSchema extractTable(Connection conn, String schema, String table) throws Exception;
