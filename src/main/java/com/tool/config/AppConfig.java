@@ -30,14 +30,6 @@ public class AppConfig {
         public String getPassword() { return password; }
         public void setPassword(String password) { this.password = password; }
 
-        public String jdbcUrl() {
-            return String.format("jdbc:sqlserver://%s:%d;encrypt=true;trustServerCertificate=true;loginTimeout=5", host, port);
-        }
-
-        public String jdbcUrlTo(String database) {
-            return String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5", host, port, database);
-        }
-
         public String tidbJdbcUrl() {
             return String.format("jdbc:mysql://%s:%d?useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&characterEncoding=utf8&connectTimeout=30000&socketTimeout=300000", host, port);
         }

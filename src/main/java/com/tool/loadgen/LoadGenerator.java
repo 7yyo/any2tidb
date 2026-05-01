@@ -96,7 +96,8 @@ public class LoadGenerator {
 
     public void start() throws Exception {
         conn = DriverManager.getConnection(
-                sourceConfig.jdbcUrlTo(database),
+                String.format("jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
+                        sourceConfig.getHost(), sourceConfig.getPort(), database),
                 sourceConfig.getUsername(),
                 sourceConfig.getPassword());
 
