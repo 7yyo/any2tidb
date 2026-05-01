@@ -15,9 +15,9 @@ import java.util.stream.Collectors;
 @Component
 public class SchemaConverter {
 
-    private final TypeMapper typeMapper;
+    private final SqlServerTypeMapper typeMapper;
 
-    public SchemaConverter(TypeMapper typeMapper) { this.typeMapper = typeMapper; }
+    public SchemaConverter(SqlServerTypeMapper typeMapper) { this.typeMapper = typeMapper; }
 
     /**
      * Produces the full DDL for a table (CREATE TABLE + CREATE INDEX statements).
@@ -43,7 +43,7 @@ public class SchemaConverter {
         // Columns — first pass: check for any unskippable (skip) columns
         List<String> skipCols = new ArrayList<>();
         for (ColumnSchema col : table.getColumns()) {
-            TypeMapper.MappedType mapped = typeMapper.mapType(col);
+            SqlServerTypeMapper.MappedType mapped = typeMapper.mapType(col);
             if (mapped.skip()) skipCols.add("'" + col.getName() + "' (" + mapped.warningMessage() + ")");
         }
         if (!skipCols.isEmpty()) {
@@ -57,7 +57,7 @@ public class SchemaConverter {
             if (col.isComputed()) {
                 result.addWarning("column '" + col.getName() + "': computed column (AS expr) converted to plain column — verify definition manually");
             }
-            TypeMapper.MappedType mapped = typeMapper.mapType(col);
+            SqlServerTypeMapper.MappedType mapped = typeMapper.mapType(col);
             if (mapped.hasWarning()) {
                 result.addWarning("column '" + col.getName() + "': " + mapped.warningMessage());
             }
@@ -244,7 +244,7 @@ public class SchemaConverter {
         for (String colName : idx.getColumns()) {
             ColumnSchema col = colMap.get(colName.trim().toLowerCase());
             if (col == null) continue;
-            TypeMapper.MappedType mapped = typeMapper.mapType(col);
+            SqlServerTypeMapper.MappedType mapped = typeMapper.mapType(col);
             total += estimateColumnKeyBytes(col, mapped.tidbType());
         }
         return total;

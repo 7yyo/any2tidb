@@ -2,7 +2,7 @@ package com.tool.schema.verifier;
 
 import static com.tool.common.SqlUtils.escapeBracket;
 
-import com.tool.schema.converter.TypeMapper;
+import com.tool.schema.converter.SqlServerTypeMapper;
 import org.springframework.stereotype.Component;
 
 import java.sql.*;
@@ -11,9 +11,9 @@ import java.util.*;
 @Component
 public class SchemaVerifier {
 
-    private final TypeMapper typeMapper;
+    private final SqlServerTypeMapper typeMapper;
 
-    public SchemaVerifier(TypeMapper typeMapper) {
+    public SchemaVerifier(SqlServerTypeMapper typeMapper) {
         this.typeMapper = typeMapper;
     }
 

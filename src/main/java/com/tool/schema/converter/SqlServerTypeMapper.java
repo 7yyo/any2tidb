@@ -4,7 +4,7 @@ import com.tool.common.model.ColumnSchema;
 import org.springframework.stereotype.Component;
 
 @Component
-public class TypeMapper {
+public class SqlServerTypeMapper {
 
     public record MappedType(String tidbType, boolean hasWarning, boolean skip, String warningMessage) {
         public static MappedType of(String type) { return new MappedType(type, false, false, null); }
@@ -32,9 +32,7 @@ public class TypeMapper {
             case "money" -> MappedType.warn("DECIMAL(19,4)", "MONEY converted to DECIMAL(19,4)");
             case "smallmoney" -> MappedType.warn("DECIMAL(10,4)", "SMALLMONEY converted to DECIMAL(10,4)");
             case "float" -> {
-                // Source float(p): p <= 24 = single-precision (4 bytes), p > 24 = double-precision (8 bytes)
-                // TiDB FLOAT = single-precision, DOUBLE = double-precision
-                int p = (prec != null && prec > 0) ? prec : 53; // default precision is 53 (double)
+                int p = (prec != null && prec > 0) ? prec : 53;
                 if (p <= 24) {
                     yield MappedType.warn("FLOAT", "FLOAT(" + p + ") is single-precision; stored as TiDB FLOAT (4 bytes) — precision may differ from source");
                 } else {
@@ -103,14 +101,12 @@ public class TypeMapper {
         if (len == null || len == -1) {
             return MappedType.warn("LONGTEXT", (unicode ? "NVARCHAR" : "VARCHAR") + "(MAX) converted to LONGTEXT");
         }
-        // nvarchar stores 2 bytes per char; maxLength from sys.columns is in bytes
         int charLen = unicode ? len / 2 : len;
         return MappedType.of("VARCHAR(" + charLen + ")" + charset);
     }
 
     public String mapDefaultValue(String rawDefault) {
         if (rawDefault == null) return null;
-        // Strip source wrapping parens: ((value)) or (value)
         String val = rawDefault.trim();
         while (val.startsWith("(") && val.endsWith(")")) {
             val = val.substring(1, val.length() - 1).trim();
