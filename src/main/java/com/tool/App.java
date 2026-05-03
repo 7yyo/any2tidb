@@ -162,6 +162,10 @@ public class App implements ApplicationRunner {
         System.out.println("Other:");
         System.out.println("  --help, -h    Show this help");
         System.out.println("  --version     Print version");
+        System.out.println();
+        System.out.println("Task management:");
+        System.out.println("  any2tidb task list         List all tasks with state and progress");
+        System.out.println("  any2tidb task show <name>  Show detailed status of a task");
     }
 
     private static void printUsage(String source) {
