@@ -10,6 +10,7 @@ import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.source.CdcProvider;
 import com.tool.source.SourceDriver;
+import com.tool.task.TaskManager;
 import com.tool.snapshot.engine.DebeziumEngineFactory;
 import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
@@ -154,7 +155,7 @@ public class SnapshotStep implements MigrationStep {
 
         ctx.put("snapshotSummaries", dbResults);
         ctx.put("snapshotTotalRows", totalRows);
-        writeSnapshotMeta(dbResults, totalRows);
+        writeSnapshotMeta(dbResults, totalRows, ctx);
 
         if (SnapshotDbResult.shouldBlockPipeline(dbResults)) {
             return StepResult.fatal("snapshot completed with errors");
@@ -269,7 +270,7 @@ public class SnapshotStep implements MigrationStep {
         }
     }
 
-    private void writeSnapshotMeta(List<SnapshotDbResult> dbResults, long totalRows) {
+    private void writeSnapshotMeta(List<SnapshotDbResult> dbResults, long totalRows, StepContext ctx) {
         try {
             StringBuilder json = new StringBuilder();
             json.append("{\n");
@@ -291,7 +292,12 @@ public class SnapshotStep implements MigrationStep {
             int totalTables = dbResults.stream().mapToInt(SnapshotDbResult::tables).sum();
             json.append("  \"totalTables\": ").append(totalTables).append("\n");
             json.append("}\n");
-            Files.writeString(Path.of("snapshot-meta.json"), json);
+            TaskManager tm = ctx.get("taskManager", TaskManager.class);
+            String taskName = ctx.get("taskName", String.class);
+            Path metaPath = (tm != null && taskName != null)
+                    ? tm.getTaskDir(taskName).resolve("snapshot-meta.json")
+                    : Path.of("snapshot-meta.json");
+            Files.writeString(metaPath, json);
             Log.info(log, "snapshot-meta.json written");
         } catch (Exception e) {
             Log.warn(log, "failed to write snapshot-meta.json", "error", e.getMessage());

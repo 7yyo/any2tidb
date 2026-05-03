@@ -16,6 +16,7 @@ import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.common.FilterUtils;
 import com.tool.schema.writer.SchemaWriter;
 import com.tool.source.SourceDriver;
+import com.tool.task.TaskManager;
 
 import static com.tool.common.SqlUtils.escapeBacktick;
 
@@ -67,9 +68,13 @@ public class SchemaMigrateStep implements MigrationStep {
     public String name() { return "SchemaMigrate"; }
 
     /** Collects all DDL for one database and writes it to a .sql file. Returns the file path. */
-    private Path writeDryRunFile(String dbName, String ddlBlock) throws IOException {
+    private Path writeDryRunFile(String dbName, String ddlBlock, StepContext ctx) throws IOException {
         String filename = dbName + ".sql";
-        Path out = Path.of(filename);
+        TaskManager tm = ctx.get("taskManager", TaskManager.class);
+        String taskName = ctx.get("taskName", String.class);
+        Path out = (tm != null && taskName != null)
+                ? tm.getTaskDir(taskName).resolve(filename)
+                : Path.of(filename);
         try (PrintWriter pw = new PrintWriter(out.toFile(), StandardCharsets.UTF_8)) {
             pw.println("-- any2tidb dry-run  db=" + dbName);
             pw.println("-- Source to TiDB directly: mysql -h host -P 4000 -u root < " + filename);
@@ -123,7 +128,7 @@ public class SchemaMigrateStep implements MigrationStep {
                  Connection tidbConn = dryRun ? null : openTiDB(dbName)) {
 
                 DbResult dr = migrateOneDb(ssConn, tidbConn, dbName,
-                        databases, tables, dropIfExists, continueOnError, dryRun);
+                        databases, tables, dropIfExists, continueOnError, dryRun, ctx);
                 totalFailed += dr.failed;
 
                 summaries.add(new SummaryPrinter.DbSummary(
@@ -168,7 +173,7 @@ public class SchemaMigrateStep implements MigrationStep {
     private DbResult migrateOneDb(Connection ssConn, Connection tidbConn,
                                   String dbName, List<String> databases, List<String> tables,
                                   boolean dropIfExists, boolean continueOnError,
-                                  boolean dryRun) throws Exception {
+                                  boolean dryRun, StepContext ctx) throws Exception {
         List<String[]> tableList = extractor.listTables(ssConn, tables);
         if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
             Log.warn(log, "--tables filter matched nothing, check spelling",
@@ -266,7 +271,7 @@ public class SchemaMigrateStep implements MigrationStep {
         // Write SQL file for dry-run
         Path sqlFile = null;
         if (dryRun && dryRunDdl != null && !dryRunDdl.isEmpty()) {
-            sqlFile = writeDryRunFile(dbName, dryRunDdl.toString());
+            sqlFile = writeDryRunFile(dbName, dryRunDdl.toString(), ctx);
         }
 
         return new DbResult(failed, warned, skipped, stopEarly, false,
