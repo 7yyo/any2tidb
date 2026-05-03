@@ -91,12 +91,21 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
                 String snapName = snapshotName(dbName);
                 createSnapshot(masterConn, dbName, snapName, snapDir);
                 created.add(snapName);
-                String lsn = ensureCdcAndCaptureLsn(dbName);
+
+                String lsn = null;
+                try {
+                    lsn = ensureCdcAndCaptureLsn(dbName);
+                    Log.info(log, "LSN captured", "database", dbName, "lsn", lsn);
+                } catch (Exception e) {
+                    Log.warn(log, "CDC/LSN capture failed, dump can proceed but sync will not be able to resume from this point",
+                            "database", dbName, "error", e.getMessage());
+                }
                 result.put(dbName, new SnapshotInfo(snapName, lsn));
-                Log.info(log, "Database snapshot created", "source", dbName, "snapshot", snapName, "lsn", lsn);
+                Log.info(log, "Database snapshot created", "source", dbName, "snapshot", snapName,
+                        "lsn", lsn != null ? lsn : "N/A");
             }
         } catch (Exception e) {
-            // Rollback: drop already-created snapshots
+            // Rollback: drop already-created snapshots on snapshot creation failure
             for (String snap : created) {
                 try { dropSnapshot(masterConn, snap); } catch (Exception ignored) {}
             }

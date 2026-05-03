@@ -24,7 +24,7 @@ public interface ConsistencyProvider {
      *
      * @param snapName snapshot database name (used internally for JDBC connections and cleanup)
      * @param lsn      max LSN at snapshot creation time, formatted as {@code 0x...} hex string;
-     *                 CDC is auto-enabled if necessary, so this is always non-null on success
+     *                 null if CDC/LSN capture failed — dump can still proceed, but sync cannot resume
      */
     record SnapshotInfo(String snapName, String lsn) {}
 

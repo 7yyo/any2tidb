@@ -149,9 +149,13 @@ public class DumpStep implements MigrationStep {
                 ? Long.MAX_VALUE : (long) fileSizeMb * 1024 * 1024;
 
         // Database Snapshot mode: consistent, parallel inter-table + intra-table
-        allResults = dumpWithSnapshots(ctx, connFactory, dbNames,
-                tables, chunkSize, threshold, concurrency, outputRoot,
-                startLsnByDb);
+        try {
+            allResults = dumpWithSnapshots(ctx, connFactory, dbNames,
+                    tables, chunkSize, threshold, concurrency, outputRoot,
+                    startLsnByDb);
+        } catch (IllegalStateException e) {
+            return StepResult.fatal(e.getMessage());
+        }
         Map<String, Integer> dbTableCounts = new LinkedHashMap<>();
         Map<String, Long> dbRowCounts = new LinkedHashMap<>();
         for (DumpTableResult r : allResults) {
@@ -213,14 +217,38 @@ public class DumpStep implements MigrationStep {
             Map<String, ConsistencyProvider.SnapshotInfo> snapMap =
                     consistency.createSnapshots(masterConn, dbNames, outputRoot);
             Map<String, String> snapNameMap = new LinkedHashMap<>();
+            List<String> lsnFailedDbs = new ArrayList<>();
             for (var entry : snapMap.entrySet()) {
                 String dbName = entry.getKey();
                 ConsistencyProvider.SnapshotInfo info = entry.getValue();
                 snapNameMap.put(dbName, info.snapName());
-                startLsnByDb.put(dbName, info.lsn());
                 allSnapNames.add(info.snapName());
+                if (info.lsn() != null) {
+                    startLsnByDb.put(dbName, info.lsn());
+                } else {
+                    lsnFailedDbs.add(dbName);
+                }
             }
             Log.info(log, "Database snapshots created", "count", allSnapNames.size());
+
+            // If any DB failed CDC/LSN capture, ask user whether to continue
+            if (!lsnFailedDbs.isEmpty()) {
+                Log.warn(log, "CDC/LSN capture failed for some databases",
+                        "databases", lsnFailedDbs,
+                        "note", "dump can proceed without CDC, but sync mode will not be able to resume");
+                System.err.println();
+                System.err.println("WARNING: CDC/LSN capture failed for: " + lsnFailedDbs);
+                System.err.println("Dump can proceed without CDC, but incremental sync cannot resume from this dump.");
+                System.err.print("Continue with dump? (y/N): ");
+                System.err.flush();
+                String answer = System.console() != null
+                        ? System.console().readLine()
+                        : new java.util.Scanner(System.in).nextLine();
+                if (answer == null || !answer.trim().equalsIgnoreCase("y")) {
+                    throw new IllegalStateException(
+                            "Dump aborted by user — CDC/LSN capture failed for: " + lsnFailedDbs);
+                }
+            }
 
             // 3. Discover all PK-range work items from snapshot databases
             List<PkRange> allRanges = new ArrayList<>();
