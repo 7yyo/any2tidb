@@ -163,6 +163,10 @@ public class TaskManager {
         return "unknown";
     }
 
+    public void writeMeta(String taskName, TaskMeta meta) throws Exception {
+        writeMeta(tasksRoot.resolve(taskName), meta);
+    }
+
     private void writeMeta(Path taskDir, TaskMeta meta) throws Exception {
         MAPPER.writeValue(taskDir.resolve("meta.json").toFile(), meta);
     }

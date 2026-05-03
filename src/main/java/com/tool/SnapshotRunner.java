@@ -82,6 +82,20 @@ class SnapshotRunner {
             } else {
                 meta = taskManager.create(taskName, "sqlserver");
                 meta.setDatabases(databases != null ? databases : List.of());
+                // Set source/target from config
+                TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
+                src.setType("sqlserver");
+                src.setHost(config.getSource().getHost());
+                src.setPort(config.getSource().getPort());
+                src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
+                meta.setSource(src);
+                TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+                tgt.setType("tidb");
+                tgt.setHost(config.getTarget().getHost());
+                tgt.setPort(config.getTarget().getPort());
+                tgt.setDatabase("");
+                meta.setTarget(tgt);
+                taskManager.writeMeta(taskName, meta);
             }
             taskManager.transition(taskName, TaskState.SNAPSHOTTING);
             App.resolveTaskPaths(taskName, taskManager, ctx);

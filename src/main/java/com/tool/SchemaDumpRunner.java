@@ -97,6 +97,7 @@ class SchemaDumpRunner {
                 tgt.setPort(config.getTarget().getPort());
                 tgt.setDatabase("");
                 meta.setTarget(tgt);
+                taskManager.writeMeta(taskName, meta);
             }
             App.resolveTaskPaths(taskName, taskManager, ctx);
             taskManager.transition(taskName, TaskState.DUMPING);
