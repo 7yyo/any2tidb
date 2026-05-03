@@ -10,11 +10,15 @@ import com.tool.pipeline.steps.PreCheckStep;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.snapshot.SnapshotStep;
 import com.tool.source.SourceDriver;
+import com.tool.task.TaskManager;
+import com.tool.task.TaskMeta;
+import com.tool.task.TaskState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 
 import javax.sql.DataSource;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -59,6 +63,31 @@ class SnapshotRunner {
         ctx.put("maxQueueSize", maxQueueSize);
         ctx.put("pollIntervalMs", pollIntervalMs);
         ctx.put("offsetCommitIntervalMs", offsetCommitIntervalMs);
+
+        // Task support
+        TaskManager taskManager = null;
+        String taskName = null;
+        if (args.containsOption("task")) {
+            taskName = args.getOptionValues("task").get(0);
+            taskManager = new TaskManager(Path.of("tasks"));
+            TaskMeta meta = taskManager.resume(taskName);
+            String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
+            if (!"dumped".equals(currentState) && !"snapshotting".equals(currentState)) {
+                throw new IllegalStateException("Task " + taskName + " is in state " + currentState
+                        + ", expected dumped. Run dump first.");
+            }
+            taskManager.transition(taskName, TaskState.SNAPSHOTTING);
+            App.resolveTaskPaths(taskName, taskManager, ctx);
+            // SyncRunner needs these paths too
+            if (ctx.get("offsetStoragePath", String.class) != null) {
+                offsetStoragePath = ctx.get("offsetStoragePath", String.class);
+            }
+            if (ctx.get("schemaHistoryPath", String.class) != null) {
+                schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
+            }
+            ctx.put("taskManager", taskManager);
+            ctx.put("taskName", taskName);
+        }
         if (offsetStoragePath != null) ctx.put("offsetStoragePath", offsetStoragePath);
         if (schemaHistoryPath != null) ctx.put("schemaHistoryPath", schemaHistoryPath);
 
@@ -68,5 +97,17 @@ class SnapshotRunner {
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);
+
+        if (taskManager != null) {
+            try {
+                if (!result.isFatal()) {
+                    taskManager.transition(taskName, TaskState.SNAPSHOT);
+                } else {
+                    taskManager.fail(taskName, result.message());
+                }
+            } finally {
+                taskManager.unlock();
+            }
+        }
     }
 }
