@@ -25,9 +25,9 @@ public enum TaskState {
     public boolean canTransitionTo(TaskState next) {
         if (next == null) return false;
         return switch (this) {
-            case CREATED      -> next == DUMPING || next == FAILED;
+            case CREATED      -> next == DUMPING || next == SNAPSHOTTING || next == FAILED;
             case DUMPING      -> next == DUMPED  || next == FAILED;
-            case DUMPED       -> next == SNAPSHOTTING || next == FAILED;
+            case DUMPED       -> next == FAILED;
             case SNAPSHOTTING -> next == SNAPSHOT || next == FAILED;
             case SNAPSHOT     -> next == SYNCING || next == FAILED;
             case SYNCING      -> next == FAILED;

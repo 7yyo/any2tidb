@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 
 import javax.sql.DataSource;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,11 +71,17 @@ class SnapshotRunner {
         if (args.containsOption("task")) {
             taskName = args.getOptionValues("task").get(0);
             taskManager = new TaskManager(Path.of("tasks"));
-            TaskMeta meta = taskManager.resume(taskName);
-            String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
-            if (!"dumped".equals(currentState) && !"snapshotting".equals(currentState)) {
-                throw new IllegalStateException("Task " + taskName + " is in state " + currentState
-                        + ", expected dumped. Run dump first.");
+            TaskMeta meta;
+            if (Files.exists(taskManager.getTaskDir(taskName))) {
+                meta = taskManager.resume(taskName);
+                String currentState = meta.getState().toValue();
+                if (!"created".equals(currentState) && !"snapshotting".equals(currentState)) {
+                    throw new IllegalStateException("Task " + taskName + " is in state " + currentState
+                            + ", expected created or snapshotting.");
+                }
+            } else {
+                meta = taskManager.create(taskName, "sqlserver");
+                meta.setDatabases(databases != null ? databases : List.of());
             }
             taskManager.transition(taskName, TaskState.SNAPSHOTTING);
             App.resolveTaskPaths(taskName, taskManager, ctx);
