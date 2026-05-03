@@ -195,6 +195,7 @@ public class App implements ApplicationRunner {
         if ("schema".equals(mode)) {
             System.out.println("  --dry-run                 Print DDL without executing (default: false)");
             System.out.println("  --drop-if-exists          DROP existing tables before creating (default: false)");
+            System.out.println("  --task=NAME               Task namespace for instance isolation");
         }
         if ("dump".equals(mode)) {
             System.out.println("  --output-dir=PATH         Output directory (default: dump-output)");
