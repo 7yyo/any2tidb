@@ -26,7 +26,8 @@ public final class SqlServerCdcUtils {
     private SqlServerCdcUtils() {}
 
     /**
-     * Ensure CDC is enabled on the database and capture the current max LSN.
+     * Capture the current max LSN for the given database. CDC must already be
+     * enabled at database level — this method does NOT auto-enable it.
      * Returns the LSN as a hex string (e.g. {@code 0x0000003a000001760001}).
      */
     public static String captureLsn(String host, int port, String user, String password, String dbName)
@@ -35,29 +36,29 @@ public final class SqlServerCdcUtils {
                 "jdbc:sqlserver://%s:%d;databaseName=%s;encrypt=true;trustServerCertificate=true;loginTimeout=5",
                 host, port, dbName);
         try (Connection c = DriverManager.getConnection(url, user, password)) {
-            // 1. Enable CDC at database level if not already enabled
             try (Statement st = c.createStatement();
                  var rs = st.executeQuery(
                          "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()")) {
-                if (rs.next() && rs.getInt(1) != 1) {
-                    Log.info(log, "CDC not enabled, auto-enabling", "database", dbName);
-                    try (Statement st2 = c.createStatement()) {
-                        st2.execute("EXEC sys.sp_cdc_enable_db");
-                    }
-                    Log.info(log, "CDC enabled", "database", dbName);
+                if (!rs.next() || rs.getInt(1) != 1) {
+                    throw new IllegalStateException(
+                            "CDC is not enabled on database '" + dbName + "'. " +
+                            "Enable it with: EXEC sys.sp_cdc_enable_db");
                 }
             }
 
-            // 2. Capture max LSN
-            try (Statement st = c.createStatement();
-                 var rs = st.executeQuery(
-                         "SELECT CONVERT(VARCHAR(MAX), sys.fn_cdc_get_max_lsn(), 1)")) {
-                if (rs.next()) {
-                    String lsn = rs.getString(1);
-                    if (lsn != null && !lsn.isBlank()) {
-                        return lsn;
+            // Capture max LSN — may need retry if CDC capture job hasn't started yet
+            for (int attempt = 0; attempt < 10; attempt++) {
+                try (Statement st = c.createStatement();
+                     var rs = st.executeQuery(
+                             "SELECT CONVERT(VARCHAR(MAX), sys.fn_cdc_get_max_lsn(), 1)")) {
+                    if (rs.next()) {
+                        String lsn = rs.getString(1);
+                        if (lsn != null && !lsn.isBlank()) {
+                            return lsn;
+                        }
                     }
                 }
+                if (attempt < 9) Thread.sleep(500);
             }
         }
         throw new IllegalStateException(
@@ -78,16 +79,21 @@ public final class SqlServerCdcUtils {
     }
 
     /**
-     * Write a Debezium-compatible offset "seed" file. Used after a NOLOCK dump
+     * Write a Debezium-compatible offset "seed" file. Used after a dump
      * to record the pre-dump LSN. The format matches Debezium's serialized
      * {@code HashMap<byte[], byte[]>} so SyncStep can read and verify it.
      */
     public static void writeDebeziumOffset(String path, String dbName, String debeziumLsn)
             throws IOException {
-        String keyJson = "[\"any2tidb_" + dbName + "\",{\"server\":\"any2tidb_"
+        // Engine name must match the "name" property set in DebeziumEngineFactory
+        // and SyncEngineFactory: "any2tidb-snapshot-" + dbName
+        String engineName = "any2tidb-snapshot-" + dbName;
+        String keyJson = "[\"" + engineName + "\",{\"server\":\"any2tidb_"
                 + dbName + "\",\"database\":\"" + dbName + "\"}]";
         String valueJson = "{\"commit_lsn\":\"" + debeziumLsn
-                + "\",\"snapshot_completed\":true}";
+                + "\",\"change_lsn\":\"NULL\""
+                + ",\"event_serial_no\":1"
+                + ",\"snapshot_completed\":true}";
 
         HashMap<byte[], byte[]> map = new HashMap<>();
         map.put(keyJson.getBytes(StandardCharsets.UTF_8),

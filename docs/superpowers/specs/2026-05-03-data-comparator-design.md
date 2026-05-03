@@ -26,8 +26,7 @@ public record ComparisonConfig(
     String targetCatalog,        // target 库名不同时指定
     List<String[]> tables,       // [schema, table] 列表; 空=所有用户表
     int batchSize,               // 每批读取行数 (默认 5000)
-    int maxMismatchRows,         // 每表差异详情上限 (默认 50)
-    boolean stopOnFirst          // 遇错即停 或 收集全部
+    int maxMismatchRows          // 每表差异详情上限 (默认 50)
 ) {
     public ComparisonConfig {
         if (catalog == null || catalog.isBlank()) throw new IllegalArgumentException("catalog required");
@@ -36,7 +35,7 @@ public record ComparisonConfig(
     }
 
     public static ComparisonConfig defaults(String catalog) {
-        return new ComparisonConfig(catalog, null, List.of(), 5000, 50, false);
+        return new ComparisonConfig(catalog, null, List.of(), 5000, 50);
     }
 }
 ```
@@ -79,7 +78,7 @@ ComparisonReport
 DataComparator c = new JdbcDataComparator();
 ComparisonReport r = c.compare(srcConn, tidbConn,
     new ComparisonConfig("FinanceDB", null,
-        List.of(new String[]{"dbo", "order_items"}), 5000, 50, false));
+        List.of(new String[]{"dbo", "order_items"}), 5000, 50));
 
 assertThat(r.hasMismatches()).isFalse();
 ```
@@ -87,7 +86,7 @@ assertThat(r.hasMismatches()).isFalse();
 ```java
 // CLI verify 命令 - 全库比对，放宽详情上限
 ComparisonReport r = comparator.compare(src, tgt,
-    new ComparisonConfig("FinanceDB", null, List.of(), 5000, 100, false));
+    new ComparisonConfig("FinanceDB", null, List.of(), 5000, 100));
 
 for (TableComparison t : r.mismatched()) {
     log.error("{}: src={} tgt={} missing={} extra={}",

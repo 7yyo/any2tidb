@@ -122,6 +122,17 @@ class DumpIntegrationTest {
                         i + ", " + (i * 1.5) + ", 'row_" + i + "')");
             }
         }
+
+        // Enable CDC on the test database (required by dump for LSN capture).
+        // A table-level capture instance is also needed so that the capture
+        // job populates cdc.lsn_time_mapping, which fn_cdc_get_max_lsn() reads.
+        try (Connection c = DriverManager.getConnection(
+                ssUrl + ";database=" + TEST_DB, SS_USER, SS_PASS);
+             Statement s = c.createStatement()) {
+            s.execute("EXEC sys.sp_cdc_enable_db");
+            s.execute("EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', "
+                    + "@source_name = 'dump_test_simple', @role_name = NULL");
+        }
     }
 
     @AfterAll
@@ -175,6 +186,7 @@ class DumpIntegrationTest {
 
         // 2. Generate LOAD DATA SQL from dump output
         StringBuilder loadSql = new StringBuilder();
+        loadSql.append("SET GLOBAL local_infile = 1;\n");
         loadSql.append("DROP DATABASE IF EXISTS " + TEST_DB + ";\n");
         loadSql.append("CREATE DATABASE " + TEST_DB + ";\n");
         loadSql.append("USE " + TEST_DB + ";\n");
@@ -237,6 +249,7 @@ class DumpIntegrationTest {
         ProcessBuilder pb = new ProcessBuilder(
                 "mysql", "-h", TIDB_HOST, "-P", String.valueOf(TIDB_PORT),
                 "-u", TIDB_USER,
+                "--local-infile=1",
                 "--default-character-set=utf8mb4",
                 "-e", "source " + loadSqlFile.toAbsolutePath());
         Map<String, String> env = pb.environment();

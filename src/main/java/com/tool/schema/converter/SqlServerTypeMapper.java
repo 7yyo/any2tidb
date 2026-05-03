@@ -4,14 +4,9 @@ import com.tool.common.model.ColumnSchema;
 import org.springframework.stereotype.Component;
 
 @Component
-public class SqlServerTypeMapper {
+public class SqlServerTypeMapper implements TypeMapper {
 
-    public record MappedType(String tidbType, boolean hasWarning, boolean skip, String warningMessage) {
-        public static MappedType of(String type) { return new MappedType(type, false, false, null); }
-        public static MappedType warn(String type, String msg) { return new MappedType(type, true, false, msg); }
-        public static MappedType skip(String msg) { return new MappedType(null, true, true, msg); }
-    }
-
+    @Override
     public MappedType mapType(ColumnSchema col) {
         String type = col.getSourceType().toLowerCase().trim();
         Integer len = col.getMaxLength();
@@ -42,15 +37,15 @@ public class SqlServerTypeMapper {
             case "real" -> MappedType.of("FLOAT");
             case "date" -> MappedType.of("DATE");
             case "time" -> {
-                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 0;
+                int fsp = (scale != null) ? Math.min(scale, 6) : 0;
                 yield fsp > 0 ? MappedType.of("TIME(" + fsp + ")") : MappedType.of("TIME");
             }
             case "datetime", "smalldatetime" -> {
-                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 0;
+                int fsp = (scale != null) ? Math.min(scale, 6) : 0;
                 yield fsp > 0 ? MappedType.of("DATETIME(" + fsp + ")") : MappedType.of("DATETIME");
             }
             case "datetime2" -> {
-                int fsp = (scale != null && scale > 0) ? Math.min(scale, 6) : 6;
+                int fsp = (scale != null) ? Math.min(scale, 6) : 6;
                 boolean truncated = scale != null && scale > 6;
                 String tidbType = fsp > 0 ? "DATETIME(" + fsp + ")" : "DATETIME";
                 yield truncated
@@ -105,6 +100,7 @@ public class SqlServerTypeMapper {
         return MappedType.of("VARCHAR(" + charLen + ")" + charset);
     }
 
+    @Override
     public String mapDefaultValue(String rawDefault) {
         if (rawDefault == null) return null;
         String val = rawDefault.trim();
@@ -117,6 +113,7 @@ public class SqlServerTypeMapper {
             case "NEWID()" -> "UUID()";
             case "NEWSEQUENTIALID()" -> "UUID()";
             case "SYSDATETIME()" -> "CURRENT_TIMESTAMP";
+            case "SYSUTCDATETIME()" -> "UTC_TIMESTAMP()";
             case "SYSDATETIMEOFFSET()" -> "CURRENT_TIMESTAMP";
             default -> val;
         };

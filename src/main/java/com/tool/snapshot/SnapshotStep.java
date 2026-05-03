@@ -107,6 +107,31 @@ public class SnapshotStep implements MigrationStep {
             return StepResult.ok("no databases to snapshot");
         }
 
+        // Check for stale offset/history files from previous snapshots
+        List<String> staleDbs = new ArrayList<>();
+        for (String dbName : dbNames) {
+            Path offsetFile = Path.of(snapshotConfig.offsetStoragePath(), dbName + ".offset");
+            Path historyFile = Path.of(snapshotConfig.schemaHistoryPath(), dbName + ".history");
+            if (Files.exists(offsetFile) || Files.exists(historyFile)) {
+                staleDbs.add(dbName);
+            }
+        }
+        if (!staleDbs.isEmpty()) {
+            System.out.println("\nFound stale snapshot data for " + staleDbs.size()
+                    + " database(s): " + String.join(", ", staleDbs));
+            System.out.print("Delete and start fresh? [y/N] ");
+            String line = System.console().readLine();
+            if (line == null || !line.trim().equalsIgnoreCase("y")) {
+                return StepResult.ok("Snapshot cancelled.");
+            }
+            int deleted = 0;
+            for (String dbName : staleDbs) {
+                try { Files.deleteIfExists(Path.of(snapshotConfig.offsetStoragePath(), dbName + ".offset")); deleted++; } catch (Exception ignored) {}
+                try { Files.deleteIfExists(Path.of(snapshotConfig.schemaHistoryPath(), dbName + ".history")); deleted++; } catch (Exception ignored) {}
+            }
+            Log.info(log, "Cleaned stale snapshot files", "count", deleted);
+        }
+
         CdcProvider cdcChecker = sourceDriver.cdcProvider();
         List<SnapshotDbResult> dbResults = new ArrayList<>();
         long totalRows = 0L;
@@ -149,6 +174,10 @@ public class SnapshotStep implements MigrationStep {
                 config.getSource().getPassword())) {
 
             List<String[]> tableList = sourceDriver.schemaExtractor().listTables(conn, tables);
+            if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
+                Log.warn(log, "--tables filter matched nothing, check spelling",
+                        "database", dbName, "filter", tables);
+            }
             CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
             if (cdcResult.hasError()) {
                 return new SnapshotDbResult(dbName, 0, 0L,
@@ -162,12 +191,6 @@ public class SnapshotStep implements MigrationStep {
             batchWriter.setTableEstimates(estimates);
             Log.info(log, "row estimates", "database", dbName, "estimates", estimates.toString());
             SnapshotSink sink = new SnapshotSink(batchWriter);
-
-            // Delete previous offset so snapshot always runs fresh
-            Path offsetFile = Path.of(snapshotConfig.offsetStoragePath(), dbName + ".offset");
-            try { Files.deleteIfExists(offsetFile); } catch (Exception ignored) {}
-            Path historyFile = Path.of(snapshotConfig.schemaHistoryPath(), dbName + ".history");
-            try { Files.deleteIfExists(historyFile); } catch (Exception ignored) {}
 
             DebeziumEngineFactory factory = new DebeziumEngineFactory(
                     config.getSource(), sourceDriver.debeziumConnectorClass());

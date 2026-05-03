@@ -170,6 +170,10 @@ public class SchemaMigrateStep implements MigrationStep {
                                   boolean dropIfExists, boolean continueOnError,
                                   boolean dryRun) throws Exception {
         List<String[]> tableList = extractor.listTables(ssConn, tables);
+        if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
+            Log.warn(log, "--tables filter matched nothing, check spelling",
+                    "database", dbName, "filter", tables);
+        }
         Log.info(log, "Starting conversion", "db", dbName, "tables", tableList.size());
 
         // Pre-check: table name conflicts across schemas

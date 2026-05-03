@@ -2,7 +2,7 @@ package com.tool.schema.verifier;
 
 import static com.tool.common.SqlUtils.escapeBracket;
 
-import com.tool.schema.converter.SqlServerTypeMapper;
+import com.tool.schema.converter.TypeMapper;
 import org.springframework.stereotype.Component;
 
 import java.sql.*;
@@ -11,9 +11,9 @@ import java.util.*;
 @Component
 public class SqlServerSchemaVerifier implements SchemaVerifier {
 
-    private final SqlServerTypeMapper typeMapper;
+    private final TypeMapper typeMapper;
 
-    public SqlServerSchemaVerifier(SqlServerTypeMapper typeMapper) {
+    public SqlServerSchemaVerifier(TypeMapper typeMapper) {
         this.typeMapper = typeMapper;
     }
 
@@ -187,7 +187,7 @@ public class SqlServerSchemaVerifier implements SchemaVerifier {
                 String typeStr = typeName != null ? typeName.toUpperCase() : "UNKNOWN";
                 if (colSize > 0 && (typeStr.startsWith("VARCHAR") || typeStr.startsWith("CHAR")
                         || typeStr.startsWith("NVARCHAR") || typeStr.startsWith("DECIMAL")
-                        || typeStr.startsWith("NUMERIC") || typeStr.startsWith("DATETIME"))) {
+                        || typeStr.startsWith("NUMERIC"))) {
                     typeStr = typeStr + "(" + colSize + ")";
                 }
                 tidbColTypes.put(colName.toLowerCase(), typeStr);

@@ -1,6 +1,10 @@
 package com.tool.compare;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetTime;
 
 final class ValueNormalizer {
 
@@ -12,7 +16,9 @@ final class ValueNormalizer {
             return bd.stripTrailingZeros().toPlainString();
         }
         if (val instanceof String s) {
-            return s.replace("\r\n", "\n").replace('\r', '\n');
+            // strip \r and trailing spaces (MySQL/TiDB trims CHAR trailing spaces)
+            s = s.replace("\r\n", "\n").replace('\r', '\n');
+            return s.replaceAll("\\s+$", "");
         }
         if (val instanceof java.sql.Timestamp ts) {
             long millis = ts.getTime();
@@ -21,6 +27,35 @@ final class ValueNormalizer {
             if (nanos % 1_000_000 >= 500_000) ms++;
             if (ms >= 1000) { millis++; ms -= 1000; }
             return new java.sql.Timestamp(millis).toString().replaceFirst("\\.\\d+$", "")
+                    + "." + String.format("%03d", ms);
+        }
+        if (val instanceof LocalDateTime ldt) {
+            // MySQL/TiDB Connector/J 8.x returns DATETIME as LocalDateTime
+            java.sql.Timestamp ts = java.sql.Timestamp.valueOf(ldt);
+            int nanos = ldt.getNano();
+            int ms = nanos / 1_000_000;
+            if (nanos % 1_000_000 >= 500_000) ms++;
+            return ts.toString().replaceFirst("\\.\\d+$", "")
+                    + "." + String.format("%03d", ms);
+        }
+        if (val instanceof LocalDate ld) {
+            return ld.toString();
+        }
+        if (val instanceof LocalTime lt) {
+            return lt.toString();
+        }
+        if (val instanceof OffsetTime ot) {
+            return ot.toString();
+        }
+        if (val instanceof java.time.OffsetDateTime odt) {
+            // normalize to UTC
+            java.time.Instant instant = odt.toInstant();
+            java.sql.Timestamp ts = java.sql.Timestamp.from(instant);
+            int nanos = odt.getNano();
+            int ms = nanos / 1_000_000;
+            if (nanos % 1_000_000 >= 500_000) ms++;
+            if (ms >= 1000) { ts.setTime(ts.getTime() + 1); ms -= 1000; }
+            return ts.toString().replaceFirst("\\.\\d+$", "")
                     + "." + String.format("%03d", ms);
         }
         if (val instanceof java.sql.Time t) {

@@ -133,7 +133,9 @@ public class SqlServerExtractor implements SchemaExtractor {
                     int prec = rs.getInt("precision");
                     col.setPrecision(prec == 0 ? null : prec);
                     int scale = rs.getInt("scale");
-                    col.setScale(scale == 0 ? null : scale);
+                    // scale=0 is meaningful for datetime2(0), time(0), decimal(p,0).
+                    // rs.wasNull() distinguishes real NULL from 0.
+                    col.setScale(rs.wasNull() ? null : scale);
                     col.setNullable(rs.getBoolean("is_nullable"));
                     col.setIdentity(rs.getBoolean("is_identity"));
                     col.setComputed(rs.getBoolean("is_computed"));

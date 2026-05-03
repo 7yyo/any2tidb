@@ -69,19 +69,19 @@ class SchemaDumpRunner {
         steps.add(new PreCheckStep(config, driver));
 
         if (dumpMode) {
-            boolean useSnapshot = parseConsistency(args);
-            ctx.put("dumpSnapshot", useSnapshot);
-
             String outputDir = args.containsOption("output-dir")
                     ? args.getOptionValues("output-dir").get(0) : "dump-output";
             int fileSizeMb = App.parseIntOption(args, "file-size-mb", 256);
             int chunkSize = App.parseIntOption(args, "chunk-size", 200000);
             int concurrency = App.parseIntOption(args, "concurrency", 4);
+            String offsetStoragePath = args.containsOption("offset-storage-path")
+                    ? args.getOptionValues("offset-storage-path").get(0) : null;
 
             ctx.put("dumpOutputDir", outputDir);
             ctx.put("dumpFileSizeMb", fileSizeMb);
             ctx.put("dumpChunkSize", chunkSize);
             ctx.put("dumpConcurrency", concurrency);
+            if (offsetStoragePath != null) ctx.put("dumpOffsetStoragePath", offsetStoragePath);
 
             long threshold = fileSizeMb <= 0
                     ? Long.MAX_VALUE : (long) fileSizeMb * 1024 * 1024;
@@ -97,13 +97,4 @@ class SchemaDumpRunner {
         App.handleResult(result, ctx);
     }
 
-    private boolean parseConsistency(ApplicationArguments args) {
-        if (!args.containsOption("consistency")) return false;
-        String v = args.getOptionValues("consistency").get(0).toLowerCase();
-        if ("true".equals(v)) return true;
-        if ("false".equals(v)) return false;
-        Logger log = LoggerFactory.getLogger(App.class);
-        Log.error(log, "Invalid --consistency value: " + v + " — valid: true, false");
-        throw new IllegalArgumentException("Invalid --consistency: " + v);
-    }
 }

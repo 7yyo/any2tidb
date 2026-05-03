@@ -19,6 +19,10 @@ import javax.sql.DataSource;
 import static com.tool.source.sqlserver.SqlServerCdcUtils.patchOffsetLsn;
 
 import java.io.File;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.io.FileInputStream;
 import java.io.ObjectInputStream;
 import java.nio.ByteBuffer;
@@ -87,12 +91,20 @@ public class SyncStep implements MigrationStep {
                         "snapshotCompleted", info != null ? info.snapshotCompleted : false);
                 allOffsetsOk = false;
             } else {
-                Log.info(log, "sync database",
-                        "database", db.dbName(),
-                        "tables", db.tables(),
-                        "snapshotRows", db.rows(),
-                        "snapshotLsn", info.commitLsn != null ? info.commitLsn : "?",
-                        "streamingFrom", info.commitLsn != null ? info.commitLsn : "snapshot start");
+                // Also verify LSN is still within CDC retention window
+                if (info.commitLsn != null && !lsnInCdcWindow(db.dbName(), info.commitLsn)) {
+                    Log.error(log, "offset LSN outside CDC retention window",
+                            "database", db.dbName(),
+                            "commitLsn", info.commitLsn);
+                    allOffsetsOk = false;
+                } else {
+                    Log.info(log, "sync database",
+                            "database", db.dbName(),
+                            "tables", db.tables(),
+                            "snapshotRows", db.rows(),
+                            "snapshotLsn", info.commitLsn != null ? info.commitLsn : "?",
+                            "streamingFrom", info.commitLsn != null ? info.commitLsn : "snapshot start");
+                }
             }
         }
         if (!allOffsetsOk) {
@@ -101,7 +113,7 @@ public class SyncStep implements MigrationStep {
         }
 
         // 3b. Ensure schema history exists for each database. If a DB has an
-        // offset but no schema history (e.g. after a NOLOCK dump), run a quick
+        // offset but no schema history (e.g. after a dump), run a quick
         // schema_only snapshot to capture the table schemas, then restore the
         // dump's LSN so CDC starts from the pre-dump point.
         ensureSchemaHistory(okDbs, cfg);
@@ -180,7 +192,7 @@ public class SyncStep implements MigrationStep {
 
     /**
      * For databases that have an offset file but no schema history (e.g. after a
-     * NOLOCK dump), run a quick Debezium {@code schema_only} snapshot to capture
+     * dump), run a quick Debezium {@code schema_only} snapshot to capture
      * table schemas, then restore the original offset LSN so CDC streaming starts
      * from the pre-dump point.
      */
@@ -270,8 +282,11 @@ public class SyncStep implements MigrationStep {
 
                 JsonNode root = new ObjectMapper().readTree(valueJson);
                 String commitLsn = root.has("commit_lsn") ? root.get("commit_lsn").asText() : null;
-                boolean snapshotCompleted = root.has("snapshot_completed")
-                        && root.get("snapshot_completed").asBoolean(false);
+                // snapshot_completed is only present during snapshot phase.
+                // Streaming-mode offsets omit it entirely — absence means snapshot
+                // was already complete and the engine was in streaming mode.
+                boolean snapshotCompleted = !root.has("snapshot_completed")
+                        || root.get("snapshot_completed").asBoolean(false);
                 return new OffsetInfo(commitLsn, snapshotCompleted);
             }
         } catch (Exception e) {
@@ -292,6 +307,34 @@ public class SyncStep implements MigrationStep {
     }
 
     private record OffsetInfo(String commitLsn, boolean snapshotCompleted) {}
+
+    // ── LSN CDC window check ─────────────────────────────────────────────────
+
+    /**
+     * Verify the offset LSN is still within the CDC retention window.
+     * If {@code sys.fn_cdc_map_lsn_to_time} returns NULL, the LSN has been
+     * cleaned up and CDC streaming cannot resume from this point.
+     */
+    private boolean lsnInCdcWindow(String dbName, String commitLsn) {
+        if (commitLsn == null || !commitLsn.matches("[0-9A-Fa-f]{8}:[0-9A-Fa-f]{8}:[0-9A-Fa-f]{4}")) {
+            Log.warn(log, "unexpected LSN format, skipping window check",
+                    "database", dbName, "commitLsn", commitLsn);
+            return true; // can't validate — assume OK
+        }
+        String hex = commitLsn.replace(":", "");
+        String url = sourceDriver.buildJdbcUrlTo(config.getSource(), dbName);
+        try (Connection c = DriverManager.getConnection(url,
+                config.getSource().getUsername(), config.getSource().getPassword());
+             Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT sys.fn_cdc_map_lsn_to_time(CONVERT(BINARY(10), '0x" + hex + "', 1)) AS ts")) {
+            return rs.next() && rs.getString("ts") != null;
+        } catch (Exception e) {
+            Log.warn(log, "LSN window check failed, assuming OK",
+                    "database", dbName, "error", e.getMessage());
+            return true; // can't verify — assume OK, don't block
+        }
+    }
 
     // ── snapshot meta fallback ───────────────────────────────────────────────
 

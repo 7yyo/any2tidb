@@ -20,14 +20,18 @@ public class JdbcDataComparator implements DataComparator {
                 tables = discoverTables(source, config.catalog());
             }
 
+            // MySQL/TiDB don't have schemas in the SQL Server sense — strip
+            // source schema (e.g. dbo) for target-side queries.
+            boolean targetIsMysql = target.getMetaData().getURL().contains("mysql");
             for (String[] st : tables) {
                 String schema = st[0];
                 String table = st[1];
                 String fullName = (schema != null && !schema.isEmpty() ? schema + "." : "") + table;
+                String tgtSchema = targetIsMysql ? "" : schema;
 
                 total++;
 
-                if (!tableExists(target, targetCatalog, schema, table)) {
+                if (!tableExists(target, targetCatalog, tgtSchema, table)) {
                     skipped++;
                     results.add(new TableComparison(fullName,
                             TableComparison.Status.SKIPPED, 0, 0,
@@ -36,7 +40,7 @@ public class JdbcDataComparator implements DataComparator {
                 }
 
                 List<String> srcPk = getPrimaryKeys(source, config.catalog(), schema, table);
-                List<String> tgtPk = getPrimaryKeys(target, targetCatalog, schema, table);
+                List<String> tgtPk = getPrimaryKeys(target, targetCatalog, tgtSchema, table);
                 if (srcPk.isEmpty() || tgtPk.isEmpty()) {
                     skipped++;
                     results.add(new TableComparison(fullName,
@@ -46,7 +50,7 @@ public class JdbcDataComparator implements DataComparator {
                 }
 
                 long srcCount = countRows(source, config.catalog(), schema, table);
-                long tgtCount = countRows(target, targetCatalog, schema, table);
+                long tgtCount = countRows(target, targetCatalog, tgtSchema, table);
                 totalRowsSrc += srcCount;
                 totalRowsTgt += tgtCount;
 
@@ -55,7 +59,7 @@ public class JdbcDataComparator implements DataComparator {
                 List<ColumnDiff> diffs = compareRows(
                         source, target,
                         config.catalog(), targetCatalog,
-                        schema, table, srcPk,
+                        schema, tgtSchema, table, srcPk,
                         config.batchSize(), config.maxMismatchRows(),
                         missing, extra);
 
@@ -125,7 +129,8 @@ public class JdbcDataComparator implements DataComparator {
 
     private long countRows(Connection conn, String catalog, String schema,
                            String table) throws SQLException {
-        String q = qualifiedName(catalog, schema, table);
+        boolean mysql = isMysql(conn);
+        String q = qualifiedName(catalog, schema, table, mysql);
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + q)) {
             return rs.next() ? rs.getLong(1) : 0;
@@ -135,14 +140,14 @@ public class JdbcDataComparator implements DataComparator {
     private List<ColumnDiff> compareRows(
             Connection src, Connection tgt,
             String srcCatalog, String tgtCatalog,
-            String schema, String table, List<String> pkCols,
+            String srcSchema, String tgtSchema, String table, List<String> pkCols,
             int batchSize, int maxDiffs,
             List<String> missingOut, List<String> extraOut) throws SQLException {
 
         List<ColumnDiff> diffs = new ArrayList<>();
 
-        String srcTable = qualifiedName(srcCatalog, schema, table);
-        String tgtTable = qualifiedName(tgtCatalog, schema, table);
+        String srcTable = qualifiedName(srcCatalog, srcSchema, table, false);
+        String tgtTable = qualifiedName(tgtCatalog, tgtSchema, table, isMysql(tgt));
 
         String orderBy = String.join(", ",
                 pkCols.stream().map(c -> "\"" + c + "\"").toList());
@@ -262,12 +267,18 @@ public class JdbcDataComparator implements DataComparator {
         return pk;
     }
 
-    private static String qualifiedName(String catalog, String schema, String table) {
+    private static String qualifiedName(String catalog, String schema, String table,
+                                         boolean mysqlMode) {
+        String q = mysqlMode ? "`" : "\"";
         StringBuilder sb = new StringBuilder();
         if (schema != null && !schema.isEmpty()) {
-            sb.append("\"").append(schema).append("\".");
+            sb.append(q).append(schema).append(q).append(".");
         }
-        sb.append("\"").append(table).append("\"");
+        sb.append(q).append(table).append(q);
         return sb.toString();
+    }
+
+    private static boolean isMysql(Connection conn) throws SQLException {
+        return conn.getMetaData().getURL().contains("mysql");
     }
 }

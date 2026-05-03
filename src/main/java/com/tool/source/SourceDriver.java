@@ -2,7 +2,7 @@ package com.tool.source;
 
 import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
-import com.tool.schema.converter.SqlServerTypeMapper;
+import com.tool.schema.converter.TypeMapper;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.verifier.SchemaVerifier;
 
@@ -22,7 +22,7 @@ public interface SourceDriver {
 
     SchemaExtractor schemaExtractor();
     DumpExtractor dumpExtractor();
-    SqlServerTypeMapper typeMapper();
+    TypeMapper typeMapper();
     SchemaVerifier verifier();
     ConsistencyProvider consistencyProvider();
     CdcProvider cdcProvider();

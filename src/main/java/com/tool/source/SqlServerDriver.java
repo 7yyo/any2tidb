@@ -2,7 +2,7 @@ package com.tool.source;
 
 import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
-import com.tool.schema.converter.SqlServerTypeMapper;
+import com.tool.schema.converter.TypeMapper;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.verifier.SchemaVerifier;
 import org.springframework.stereotype.Component;
@@ -14,14 +14,14 @@ public class SqlServerDriver implements SourceDriver {
 
     private final SchemaExtractor schemaExtractor;
     private final DumpExtractor dumpExtractor;
-    private final SqlServerTypeMapper typeMapper;
+    private final TypeMapper typeMapper;
     private final SchemaVerifier verifier;
     private final ConsistencyProvider consistencyProvider;
     private final CdcProvider cdcProvider;
 
     public SqlServerDriver(SchemaExtractor schemaExtractor,
                            DumpExtractor dumpExtractor,
-                           SqlServerTypeMapper typeMapper,
+                           TypeMapper typeMapper,
                            SchemaVerifier verifier,
                            AppConfig config) {
         this.schemaExtractor = schemaExtractor;
@@ -51,7 +51,7 @@ public class SqlServerDriver implements SourceDriver {
     public DumpExtractor dumpExtractor() { return dumpExtractor; }
 
     @Override
-    public SqlServerTypeMapper typeMapper() { return typeMapper; }
+    public TypeMapper typeMapper() { return typeMapper; }
 
     @Override
     public SchemaVerifier verifier() { return verifier; }

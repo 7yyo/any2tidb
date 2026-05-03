@@ -159,46 +159,47 @@ public class App implements ApplicationRunner {
         System.out.println("Usage: any2tidb " + source + " " + mode + " [options]");
         System.out.println();
         System.out.println("Options:");
-        System.out.println("  --log-level=LEVEL     DEBUG, INFO, WARN, ERROR (default: INFO)");
+        System.out.println("  --log-level=LEVEL         DEBUG, INFO, WARN, ERROR (default: INFO)");
         if ("schema".equals(mode) || "dump".equals(mode)) {
-            System.out.println("  --dry-run             Print DDL / SQL without executing");
-            System.out.println("  --databases=db1,db2   Filter databases to migrate");
-            System.out.println("  --tables=t1,t2        Migrate only specified tables");
-            System.out.println("  --drop-if-exists      DROP existing tables before creating");
-            System.out.println("  --stop-on-error       Stop on first table failure (default: continue)");
+            System.out.println("  --databases=db1,db2,...   Filter databases, e.g. HRDB,Inventory (default: all)");
+            System.out.println("  --tables=t1,t2,...        Migrate only specified tables (default: all)");
+            System.out.println("  --stop-on-error=true|false  Stop on first table failure (default: true)");
+        }
+        if ("schema".equals(mode)) {
+            System.out.println("  --dry-run                 Print DDL without executing (default: false)");
+            System.out.println("  --drop-if-exists          DROP existing tables before creating (default: false)");
         }
         if ("dump".equals(mode)) {
-            System.out.println("  --output-dir=PATH     Output directory (default: dump-output)");
-            System.out.println("  --file-size-mb=N      Max CSV file size in MB (default: 256, 0=unlimited)");
-            System.out.println("  --chunk-size=N        Rows per PK-range chunk (default: 200000)");
-            System.out.println("  --consistency=true    Enable database-level snapshot consistency (default: false)");
-            System.out.println("  --concurrency=N       Number of concurrent table exports (default: 4)");
+            System.out.println("  --output-dir=PATH         Output directory (default: dump-output)");
+            System.out.println("  --file-size-mb=N          Max CSV file size in MB, 0=unlimited (default: 256)");
+            System.out.println("  --chunk-size=N            Rows per PK-range chunk (default: 200000)");
+            System.out.println("  --concurrency=N           Concurrent table exports (default: 4)");
+            System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
         }
         if ("snapshot".equals(mode)) {
-            System.out.println("  --databases=db1,db2   Only process specified databases (default: all)");
-            System.out.println("  --tables=t1,t2        Only process specified tables");
-            System.out.println("  --batch-size=N        INSERT batch size (default: 10000)");
-            System.out.println("  --fetch-size=N        Debezium snapshot fetch size (default: 10000)");
-            System.out.println("  --snapshot-threads=N  Parallel chunk threads (default: 1)");
+            System.out.println("  --databases=db1,db2,...   Only process specified databases (default: all)");
+            System.out.println("  --tables=t1,t2,...        Only process specified tables (default: all)");
+            System.out.println("  --batch-size=N            INSERT batch size (default: 10000)");
+            System.out.println("  --fetch-size=N            Debezium snapshot fetch size (default: 10000)");
+            System.out.println("  --snapshot-threads=N      Parallel chunk threads (default: 1)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
-            System.out.println("  --max-queue-size=N    Debezium engine max queue size (default: 16384)");
-            System.out.println("  --poll-interval-ms=N  Debezium poll interval in ms (default: 500)");
+            System.out.println("  --max-queue-size=N        Debezium engine max queue size (default: 16384)");
+            System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
-            System.out.println("  --enable-cdc         Automatically enable CDC on source database and tables");
-
+            System.out.println("  --enable-cdc              Auto-enable CDC on source DB and tables (default: false)");
         }
         if ("sync".equals(mode)) {
-            System.out.println("  --poll-interval-ms=N  Debezium poll interval in ms (default: 500)");
+            System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
-            System.out.println("  --meta-file=PATH      Snapshot meta JSON file (default: snapshot-meta.json)");
+            System.out.println("  --meta-file=PATH          Snapshot meta JSON file (default: snapshot-meta.json)");
         }
         if ("loadgen".equals(mode)) {
-            System.out.println("  --database=NAME       Source database, e.g. HRDB (required)");
-            System.out.println("  --rate=N              Operations per second (default: 5)");
-            System.out.println("  --duration=N          Run duration in seconds (default: 0 = forever until Ctrl+C)");
+            System.out.println("  --database=NAME           Source database, e.g. HRDB (required)");
+            System.out.println("  --rate=N                  Operations per second (default: 5)");
+            System.out.println("  --duration=N              Run duration in seconds, 0=forever (default: 0)");
             System.out.println();
             System.out.println("  Targets hr.employees and hr.departments (hardcoded).");
         }
@@ -231,7 +232,7 @@ public class App implements ApplicationRunner {
             "dry-run", "databases", "tables", "drop-if-exists", "stop-on-error", "log-level"
     );
     private static final Set<String> DUMP_FLAGS = Set.of(
-            "output-dir", "file-size-mb", "chunk-size", "consistency", "concurrency"
+            "output-dir", "file-size-mb", "chunk-size", "concurrency", "offset-storage-path"
     );
     private static final Set<String> SNAPSHOT_FLAGS = Set.of(
             "batch-size", "fetch-size", "snapshot-threads",
@@ -351,7 +352,12 @@ public class App implements ApplicationRunner {
 
         boolean dryRun         = args.containsOption("dry-run");
         boolean dropIfExists   = args.containsOption("drop-if-exists");
-        boolean continueOnError = !args.containsOption("stop-on-error");
+        boolean stopOnError    = true;
+        if (args.containsOption("stop-on-error")) {
+            List<String> vals = args.getOptionValues("stop-on-error");
+            if (!vals.isEmpty()) stopOnError = !"false".equalsIgnoreCase(vals.get(0));
+        }
+        boolean continueOnError = !stopOnError;
         List<String> databases = parseListOption(args, "databases");
         List<String> tables    = parseListOption(args, "tables");
 

@@ -41,7 +41,9 @@
       "Bash(javap -c -classpath ~/.m2/repository/io/debezium/debezium-storage-file/3.5.0.Final/debezium-storage-file-3.5.0.Final.jar io.debezium.storage.file.FileOffsetBackingStore)",
       "Bash(jar tf:*)",
       "Bash(find ~/.m2/repository/io/debezium -name \"*.jar\" -type f -exec sh -c 'jar tf \"$1\" 2>/dev/null | grep -l \"OffsetBack\" && echo \"$1\"' _ {} \\\\;)",
-      "Bash(mvn dependency:tree -q)"
+      "Bash(mvn dependency:tree -q)",
+      "Bash(javac -d tmp tmp/OffsetReader.java)",
+      "Bash(java -cp tmp OffsetReader /Users/sev7nyo/code/any2tidb/dist/HRDB.offset /Users/sev7nyo/code/any2tidb/dist/HRDB.offset.dump)"
     ]
   }
 }

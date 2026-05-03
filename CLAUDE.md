@@ -84,6 +84,8 @@
 
 - 所有新建文件必须在 `/Users/sev7nyo/code/any2tidb/tmp/` 下，禁止写 `/tmp`
 - 写代码前先查文档/验证 API 用法，不要凭记忆猜测
+- **声称代码状态前必须 grep/Read 验证**，不要靠 git log/commit message 推断。commit message 能骗人，代码不会
+- **共享条件块要逐个模式验证**：help 文本、if 分支、共享配置——每个使用方独立确认，不假设共用 = 各方都消费
 - memory 只沉淀有价值的、跨 session 的洞察，不灌原始笔记
 - **mem9-recall**: 不主动调。只在用户明确要求 "查记忆" 或 auto-memory 明显缺信息时调。auto-memory（MEMORY.md + linked files）已随 session 启动自动加载，不需要重复查询
 - **mem9-store**: 不主动调。只在用户明确说 "记住" 且涉及跨项目共享时调。仅限本项目的洞察走本地 auto-memory

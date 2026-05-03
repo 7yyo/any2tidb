@@ -37,28 +37,13 @@ public class SqlServerDumpExtractor implements DumpExtractor {
     @Override
     public void streamTable(Connection conn, String schema, String table,
                             int chunkSize, RowBatchConsumer consumer) throws Exception {
-        streamTable(conn, schema, table, chunkSize, true, consumer);
-    }
-
-    @Override
-    public void streamTable(Connection conn, String schema, String table,
-                            int chunkSize, boolean useNolock,
-                            RowBatchConsumer consumer) throws Exception {
-        String hint = useNolock ? " WITH (NOLOCK)" : "";
-        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "]" + hint;
+        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "]";
         streamSql(conn, sql, chunkSize, consumer);
     }
 
     @Override
     public List<String> getColumnNames(Connection conn, String schema, String table) throws Exception {
-        return getColumnNames(conn, schema, table, true);
-    }
-
-    @Override
-    public List<String> getColumnNames(Connection conn, String schema, String table,
-                                       boolean useNolock) throws Exception {
-        String hint = useNolock ? " WITH (NOLOCK)" : "";
-        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "]" + hint + " WHERE 1=0";
+        String sql = "SELECT * FROM [" + escapeBracket(schema) + "].[" + escapeBracket(table) + "] WHERE 1=0";
         try (PreparedStatement ps = conn.prepareStatement(
                 sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              ResultSet rs = ps.executeQuery()) {
