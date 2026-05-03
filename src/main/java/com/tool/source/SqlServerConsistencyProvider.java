@@ -29,6 +29,7 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
 
     private static final Logger log = LoggerFactory.getLogger(SqlServerConsistencyProvider.class);
     private static final String SNAP_SUFFIX = "_any2tidb_snap";
+    private static final long PID = ProcessHandle.current().pid();
 
     private final String host;
     private final int port;
@@ -148,7 +149,7 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
     // ── Snapshot operations ──────────────────────────────────────────────────
 
     public static String snapshotName(String dbName) {
-        return dbName.toLowerCase() + SNAP_SUFFIX;
+        return dbName.toLowerCase() + SNAP_SUFFIX + "_" + PID;
     }
 
     /**
@@ -211,12 +212,25 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
     private void cleanOrphanSnapshots(Connection masterConn) throws Exception {
         List<String> orphans = new ArrayList<>();
         String sql = "SELECT name FROM sys.databases WHERE name LIKE '%" +
-                     SNAP_SUFFIX.replace("_", "\\_") + "' ESCAPE '\\'";
+                     SNAP_SUFFIX.replace("_", "\\_") + "%' ESCAPE '\\'";
         try (Statement st = masterConn.createStatement();
              ResultSet rs = st.executeQuery(sql)) {
             while (rs.next()) {
                 String name = rs.getString("name");
-                if (name.endsWith(SNAP_SUFFIX)) {
+                if (name.contains(SNAP_SUFFIX)) {
+                    // Extract PID from snapshot name (format: db_suffix_PID)
+                    int pidIdx = name.lastIndexOf("_");
+                    if (pidIdx > 0) {
+                        try {
+                            long snapPid = Long.parseLong(name.substring(pidIdx + 1));
+                            if (ProcessHandle.of(snapPid).isPresent()) {
+                                Log.info(log, "Skipping active snapshot", "name", name, "pid", snapPid);
+                                continue; // PID still alive, don't drop
+                            }
+                        } catch (NumberFormatException ignored) {
+                            // Old format without PID — drop it
+                        }
+                    }
                     orphans.add(name);
                 }
             }
