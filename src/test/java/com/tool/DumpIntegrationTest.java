@@ -145,6 +145,35 @@ class DumpIntegrationTest {
         try { deleteDir(Path.of(OUTPUT_DIR)); } catch (Exception ignored) {}
     }
 
+    @Test
+    void dumpAndLoadAndCompare() throws Exception {
+        // Clean output dir before dump
+        deleteDir(Path.of(OUTPUT_DIR));
+
+        // 1. Dump via API
+        DumpStep dumpStep = new DumpStep(config,
+                driver.schemaExtractor(),
+                driver.dumpExtractor(),
+                () -> new CsvDumpWriter(Long.MAX_VALUE), // no file splitting
+                driver.consistencyProvider(),
+                driver);
+
+        StepContext ctx = new StepContext();
+        ctx.put("databases", List.of(TEST_DB));
+        ctx.put("dumpOutputDir", OUTPUT_DIR);
+        ctx.put("dumpFileSizeMb", 0);      // 0 = no size limit
+        ctx.put("dumpChunkSize", 200000);
+        ctx.put("dumpConcurrency", 2);
+
+        StepResult result = dumpStep.execute(ctx);
+        assertThat(result.isFatal()).isFalse();
+
+        // Verify dump output files exist
+        Path dumpDir = Path.of(OUTPUT_DIR, TEST_DB);
+        assertThat(Files.exists(dumpDir)).isTrue();
+        assertThat(Files.list(dumpDir).count()).isGreaterThanOrEqualTo(2);
+    }
+
     private static void deleteDir(Path dir) throws IOException {
         if (Files.exists(dir)) {
             try (var stream = Files.walk(dir)) {
