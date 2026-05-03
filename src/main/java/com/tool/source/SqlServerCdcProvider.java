@@ -97,38 +97,21 @@ public class SqlServerCdcProvider implements CdcProvider {
 
     @Override
     public CdcCheckResult check(Connection conn, String dbName,
-                                List<String[]> tables, boolean autoEnable) {
+                                List<String[]> tables) {
         try {
             boolean agentRunning = isAgentRunning(conn);
             if (!agentRunning) {
                 Log.warn(log, "SQL Server Agent is not running (not required for Debezium)");
             }
 
-            boolean cdcEnabled = isCdcEnabled(conn, dbName);
-            if (!cdcEnabled) {
-                if (autoEnable) {
-                    enableCdc(conn, dbName);
-                    cdcEnabled = true;
-                } else {
-                    return new CdcCheckResult(true,
-                            "CDC is not enabled on database '" + dbName + "'. Use --enable-cdc or run: EXEC sys.sp_cdc_enable_db",
-                            true, false, tables.stream().map(t -> t[1]).toList());
-                }
+            if (!isCdcEnabled(conn, dbName)) {
+                enableCdc(conn, dbName);
             }
 
             List<String> missing = getTablesWithoutCdc(conn, dbName, tables);
-            if (!missing.isEmpty()) {
-                if (autoEnable) {
-                    for (String[] t : tables) {
-                        if (missing.contains(t[0] + "." + t[1])) {
-                            enableCdcForTable(conn, dbName, t[0], t[1]);
-                        }
-                    }
-                    missing = List.of();
-                } else {
-                    return new CdcCheckResult(true,
-                            "CDC not enabled for tables: " + missing + ". Use --enable-cdc or run: EXEC sys.sp_cdc_enable_table",
-                            true, true, missing);
+            for (String[] t : tables) {
+                if (missing.contains(t[0] + "." + t[1])) {
+                    enableCdcForTable(conn, dbName, t[0], t[1]);
                 }
             }
 

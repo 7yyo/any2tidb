@@ -41,7 +41,6 @@ class SnapshotRunner {
         int batchSize = App.parseIntOption(args, "batch-size", SnapshotConfig.DEFAULT_BATCH_INSERT_SIZE);
         int fetchSize = App.parseIntOption(args, "fetch-size", SnapshotConfig.DEFAULT_SNAPSHOT_FETCH_SIZE);
         int snapshotThreads = App.parseIntOption(args, "snapshot-threads", SnapshotConfig.DEFAULT_SNAPSHOT_MAX_THREADS);
-        boolean enableCdc = args.containsOption("enable-cdc");
         String offsetStoragePath = args.containsOption("offset-storage-path")
                 ? args.getOptionValues("offset-storage-path").get(0) : null;
         String schemaHistoryPath = args.containsOption("schema-history-path")
@@ -57,7 +56,6 @@ class SnapshotRunner {
         ctx.put("batchSize", batchSize);
         ctx.put("fetchSize", fetchSize);
         ctx.put("snapshotThreads", snapshotThreads);
-        ctx.put("enableCdc", enableCdc);
         ctx.put("maxQueueSize", maxQueueSize);
         ctx.put("pollIntervalMs", pollIntervalMs);
         ctx.put("offsetCommitIntervalMs", offsetCommitIntervalMs);

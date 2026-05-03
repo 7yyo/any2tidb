@@ -25,5 +25,5 @@ public interface CdcProvider {
     void enableCdcForTable(Connection conn, String dbName, String schema, String table) throws Exception;
 
     CdcCheckResult check(Connection conn, String dbName,
-                          List<String[]> tables, boolean autoEnable);
+                          List<String[]> tables);
 }

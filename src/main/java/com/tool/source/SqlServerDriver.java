@@ -41,7 +41,7 @@ public class SqlServerDriver implements SourceDriver {
 
     @Override
     public Set<String> ownFlags() {
-        return Set.of("enable-cdc");
+        return Set.of();
     }
 
     @Override

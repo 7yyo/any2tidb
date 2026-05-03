@@ -145,10 +145,6 @@ public class App implements ApplicationRunner {
         System.out.println("  sync          Stream CDC changes to TiDB (requires prior snapshot)");
         System.out.println("  loadgen       Generate continuous CRUD load on source database");
         System.out.println();
-        if ("sqlserver".equals(source)) {
-            System.out.println("SQL Server options (common across modes):");
-            System.out.println("  --enable-cdc     Automatically enable CDC on source database");
-        }
         System.out.println();
         System.out.println("Run 'any2tidb " + source + " <mode> --help' for mode-specific options.");
     }
@@ -188,7 +184,6 @@ public class App implements ApplicationRunner {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
-            System.out.println("  --enable-cdc              Auto-enable CDC on source DB and tables (default: false)");
         }
         if ("sync".equals(mode)) {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
@@ -238,7 +233,7 @@ public class App implements ApplicationRunner {
             "batch-size", "fetch-size", "snapshot-threads",
             "offset-storage-path", "schema-history-path",
             "max-queue-size", "poll-interval-ms", "offset-commit-interval-ms",
-            "snapshot-max-threads-multiplier", "enable-cdc"
+            "snapshot-max-threads-multiplier"
     );
     private static final Set<String> SYNC_FLAGS = Set.of(
             "offset-storage-path", "schema-history-path",

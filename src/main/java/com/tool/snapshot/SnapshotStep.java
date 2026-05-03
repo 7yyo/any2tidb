@@ -66,7 +66,6 @@ public class SnapshotStep implements MigrationStep {
         Double snapshotMaxThreadsMultiplier = ctx.get("snapshotMaxThreadsMultiplier", Double.class);
         String offsetStoragePath = ctx.get("offsetStoragePath", String.class);
         String schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
-        Boolean enableCdc = ctx.get("enableCdc", Boolean.class);
 
         SnapshotConfig snapshotConfig = SnapshotConfig.defaults();
         if (offsetStoragePath != null) snapshotConfig = snapshotConfig.withOffsetStoragePath(offsetStoragePath);
@@ -140,8 +139,7 @@ public class SnapshotStep implements MigrationStep {
         for (String dbName : dbNames) {
             long dbStartMs = System.currentTimeMillis();
             SnapshotDbResult dbResult = snapshotDatabase(
-                    dbName, tables, cdcChecker, snapshotConfig,
-                    enableCdc != null && enableCdc);
+                    dbName, tables, cdcChecker, snapshotConfig);
             dbResults.add(dbResult);
             if (!dbResult.isError()) {
                 totalRows += dbResult.rows();
@@ -166,8 +164,7 @@ public class SnapshotStep implements MigrationStep {
 
     private SnapshotDbResult snapshotDatabase(String dbName, List<String> tables,
                                                CdcProvider cdcChecker,
-                                               SnapshotConfig snapshotConfig,
-                                               boolean autoEnable) {
+                                               SnapshotConfig snapshotConfig) {
         try (Connection conn = DriverManager.getConnection(
                 sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
                 config.getSource().getUsername(),
@@ -178,7 +175,7 @@ public class SnapshotStep implements MigrationStep {
                 Log.warn(log, "--tables filter matched nothing, check spelling",
                         "database", dbName, "filter", tables);
             }
-            CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList, autoEnable);
+            CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList);
             if (cdcResult.hasError()) {
                 return new SnapshotDbResult(dbName, 0, 0L,
                         Instant.now(), cdcResult.errorMessage());
