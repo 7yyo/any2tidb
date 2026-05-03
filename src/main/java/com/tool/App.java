@@ -63,6 +63,31 @@ public class App implements ApplicationRunner {
         Runtime.getRuntime().addShutdownHook(new Thread(
                 com.mysql.cj.jdbc.AbandonedConnectionCleanupThread::uncheckedShutdown));
 
+        // Handle task subcommands before general help (so "task --help" works)
+        if (args.length >= 1 && "task".equals(args[0])) {
+            if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
+                System.out.println("Usage: any2tidb task list|show <name>");
+                System.out.println();
+                System.out.println("Commands:");
+                System.out.println("  list         List all tasks with state and progress");
+                System.out.println("  show <name>  Show detailed status of a task");
+                return;
+            }
+            if (args.length >= 2) {
+                String sub = args[1];
+                if ("list".equals(sub)) {
+                    taskList();
+                } else if ("show".equals(sub) && args.length >= 3) {
+                    taskShow(args[2]);
+                } else {
+                    System.out.println("Usage: any2tidb task list|show <name>");
+                }
+            } else {
+                System.out.println("Usage: any2tidb task list|show <name>");
+            }
+            return;
+        }
+
         boolean wantHelp = Arrays.asList(args).contains("--help") || Arrays.asList(args).contains("-h");
 
         if (args.length == 0 || wantHelp) {
@@ -94,25 +119,6 @@ public class App implements ApplicationRunner {
         }
         if (Arrays.asList(args).contains("--version")) {
             System.out.println("any2tidb 1.0.0");
-            return;
-        }
-        if (args.length >= 2 && "task".equals(args[0])) {
-            if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
-                System.out.println("Usage: any2tidb task list|show <name>");
-                System.out.println();
-                System.out.println("Commands:");
-                System.out.println("  list         List all tasks with state and progress");
-                System.out.println("  show <name>  Show detailed status of a task");
-                return;
-            }
-            String sub = args[1];
-            if ("list".equals(sub)) {
-                taskList();
-            } else if ("show".equals(sub) && args.length >= 3) {
-                taskShow(args[2]);
-            } else {
-                System.out.println("Usage: any2tidb task list|show <name>");
-            }
             return;
         }
         SpringApplication app = new SpringApplication(App.class);

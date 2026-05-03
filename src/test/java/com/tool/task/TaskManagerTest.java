@@ -69,6 +69,17 @@ class TaskManagerTest {
     }
 
     @Test
+    void transitionThrowsOnInvalidState() throws Exception {
+        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
+        tm.create("invalid-trans", "sqlserver");
+
+        assertThrows(IllegalStateException.class,
+                () -> tm.transition("invalid-trans", TaskState.SYNCING));
+
+        tm.unlock();
+    }
+
+    @Test
     void listTasksReturnsAllTaskNames() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
         tm.create("task-a", "sqlserver"); tm.unlock();
