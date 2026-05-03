@@ -454,8 +454,8 @@ public class App implements ApplicationRunner {
                     }
                     TaskMeta.SourceInfo src = m.getSource();
                     TaskMeta.TargetInfo tgt = m.getTarget();
-                    String sourceStr = src != null ? src.getDatabase() : "?";
-                    String targetStr = tgt != null ? tgt.getDatabase() : "?";
+                    String sourceStr = src != null && src.getDatabase() != null ? src.getDatabase() : "?";
+                    String targetStr = tgt != null && tgt.getDatabase() != null ? tgt.getDatabase() : "?";
                     System.out.printf("%-20s %-12s %-15s %-15s %s%n",
                             name, m.getState() != null ? m.getState().toValue() : "?",
                             sourceStr, targetStr, progress);
