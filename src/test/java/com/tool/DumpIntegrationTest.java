@@ -58,10 +58,21 @@ class DumpIntegrationTest {
         SqlServerSchemaVerifier verifier = new SqlServerSchemaVerifier(typeMapper);
         driver = new SqlServerDriver(extractor, dumpExtractor, typeMapper, verifier, config);
 
-        // Create test database on SQL Server
+        // Drop TiDB database from previous run (keep after test for inspection)
+        String tidbUrl = "jdbc:mysql://" + TIDB_HOST + ":" + TIDB_PORT + "?rewriteBatchedStatements=true";
+        try (Connection c = DriverManager.getConnection(tidbUrl, TIDB_USER, TIDB_PASS);
+             Statement s = c.createStatement()) {
+            s.execute("DROP DATABASE IF EXISTS " + TEST_DB);
+        } catch (Exception ignored) {}
+        // Clean output dir from previous run
+        try { deleteDir(Path.of(OUTPUT_DIR)); } catch (Exception ignored) {}
+
+        // Create test database on SQL Server (drop first if leftover from crashed run)
         String ssUrl = "jdbc:sqlserver://" + SS_HOST + ":" + SS_PORT + ";encrypt=false";
         try (Connection c = DriverManager.getConnection(ssUrl, SS_USER, SS_PASS);
              Statement s = c.createStatement()) {
+            try { s.execute("ALTER DATABASE " + TEST_DB + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE"); } catch (Exception ignored) {}
+            try { s.execute("DROP DATABASE " + TEST_DB); } catch (Exception ignored) {}
             s.execute("CREATE DATABASE " + TEST_DB);
         }
 
@@ -115,6 +126,47 @@ class DumpIntegrationTest {
             // Default values
             s.execute("INSERT INTO dump_test_types (id, col_varchar) VALUES (5, 'defaults')");
 
+            // --- Boundary value rows (6-9): dense, all 16 columns filled ---
+
+            // Row 6: Minimum / negative boundaries
+            s.execute("INSERT INTO dump_test_types VALUES (6, " +
+                    "-9223372036854775808, -99999999999999.9999, -1.79769313486231E308, -$922337203685477.5807, 0, " +
+                    "'1753-01-01', '00:00:00', '1753-01-01 00:00:00.000', '1753-01-01 00:00:00', " +
+                    "'1753-01-01 00:00:00.0000000', '1753-01-01 00:00:00.000 -12:00', " +
+                    "'min_char  ', 'min_varchar', N'最小', 'minimum boundary text', " +
+                    "'min_null', '00000000-0000-0000-0000-000000000000')");
+
+            // Row 7: Maximum / positive boundaries
+            // Use datetime values that won't round up past 9999-12-31 23:59:59
+            String varchar50 = "x".repeat(50);
+            String text500 = "X".repeat(500);
+            s.execute("INSERT INTO dump_test_types VALUES (7, " +
+                    "9223372036854775807, 99999999999999.9999, 1.79769313486231E308, $922337203685477.5807, 1, " +
+                    "'9999-12-31', '23:59:59', '9999-12-31 23:59:59.000', '9999-12-31 23:59:59', " +
+                    "'9999-12-31 23:59:59.1234567', '9999-12-31 23:59:59.123 +14:00', " +
+                    "'MAX_CHAR_X', '" + varchar50 + "', " +
+                    "N'一二三四五六七八九十一二三四五六七八九十一二三四五', " +
+                    "'" + text500 + "', 'max_null', 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF')");
+
+            // Row 8: Zero / neutral / midnight
+            s.execute("INSERT INTO dump_test_types VALUES (8, " +
+                    "0, 0.0000, 0.0, $0.00, 0, " +
+                    "'2000-01-01', '12:00:00', '2000-01-01 12:00:00.000', '2000-01-01 12:00:00', " +
+                    "'2000-01-01 12:00:00.5000000', '2000-01-01 12:00:00.500 +00:00', " +
+                    "'0000000000', '0', N'0', '0', " +
+                    "'', '11111111-1111-1111-1111-111111111111')");
+
+            // Row 9: Precision + encoding stress
+            // Backslashes doubled: LOAD DATA default ESCAPED BY '\' consumes single backslashes
+            String text2000 = "A".repeat(2000);
+            s.execute("INSERT INTO dump_test_types VALUES (9, " +
+                    "1, 0.0001, 2.2250738585072014E-308, $0.0001, 1, " +
+                    "'2024-02-29', '00:00:01', '2024-02-29 00:00:01.003', '2024-02-29 00:00:01', " +
+                    "'2024-02-29 00:00:01.1234567', '2024-02-29 00:00:01.123 +05:30', " +
+                    "'ABCDEFGHIJ', 'say \"hello\", comma, \\r\\n tab\\tback\\\\slash', " +
+                    "N'中文测试字符\uD842\uDFB7\uD83C\uDF89', " +
+                    "'" + text2000 + "', 'not null \uD83D\uDC4B', NEWID())");
+
             // dump_test_simple — scale table, 1000 rows
             s.execute("CREATE TABLE dump_test_simple (id INT PRIMARY KEY, val DECIMAL(10,2), name VARCHAR(100))");
             for (int i = 1; i <= 1000; i++) {
@@ -144,16 +196,6 @@ class DumpIntegrationTest {
             s.execute("ALTER DATABASE " + TEST_DB + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE");
             s.execute("DROP DATABASE " + TEST_DB);
         } catch (Exception ignored) {}
-
-        // Drop TiDB test database
-        String tidbUrl = "jdbc:mysql://" + TIDB_HOST + ":" + TIDB_PORT + "?rewriteBatchedStatements=true";
-        try (Connection c = DriverManager.getConnection(tidbUrl, TIDB_USER, TIDB_PASS);
-             Statement s = c.createStatement()) {
-            s.execute("DROP DATABASE IF EXISTS " + TEST_DB);
-        } catch (Exception ignored) {}
-
-        // Clean output dir
-        try { deleteDir(Path.of(OUTPUT_DIR)); } catch (Exception ignored) {}
     }
 
     @Test
@@ -210,13 +252,13 @@ class DumpIntegrationTest {
                 col_bit TINYINT(1),
                 col_date DATE,
                 col_time TIME(0),
-                col_datetime DATETIME,
-                col_datetime2_0 DATETIME,
+                col_datetime DATETIME(3),
+                col_datetime2_0 DATETIME(0),
                 col_datetime2_7 DATETIME(6),
                 col_datetimeoffset DATETIME(3),
                 col_char CHAR(10),
                 col_varchar VARCHAR(50),
-                col_nvarchar VARCHAR(25) CHARACTER SET utf8mb4,
+                col_nvarchar VARCHAR(50) CHARACTER SET utf8mb4,
                 col_text LONGTEXT,
                 col_null_str VARCHAR(20) NULL,
                 col_guid VARCHAR(36)
@@ -274,8 +316,11 @@ class DumpIntegrationTest {
              Connection tgtConn = DriverManager.getConnection(tidbUrl, TIDB_USER, TIDB_PASS)) {
 
             DataComparator cmp = new JdbcDataComparator();
-            ComparisonReport r = cmp.compare(srcConn, tgtConn,
-                    ComparisonConfig.defaults(TEST_DB));
+            ComparisonConfig cfg = new ComparisonConfig(TEST_DB, null,
+                    List.of(new String[]{"dbo", "dump_test_types"},
+                            new String[]{"dbo", "dump_test_simple"}),
+                    5000, 50);
+            ComparisonReport r = cmp.compare(srcConn, tgtConn, cfg);
 
             if (r.hasMismatches()) {
                 for (TableComparison t : r.mismatched()) {

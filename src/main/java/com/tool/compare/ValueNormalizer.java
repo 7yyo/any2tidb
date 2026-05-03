@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetTime;
+import java.time.ZoneOffset;
 
 final class ValueNormalizer {
 
@@ -47,10 +48,28 @@ final class ValueNormalizer {
         if (val instanceof OffsetTime ot) {
             return ot.toString();
         }
+        if (val instanceof microsoft.sql.DateTimeOffset dto) {
+            // SQL Server vendor type: normalize to local datetime (not UTC).
+            // Use Instant+ZoneOffset.UTC to avoid Timestamp.toLocalDateTime()
+            // which applies system timezone (would double-add TZ offset).
+            java.sql.Timestamp utcTs = dto.getTimestamp();
+            int offsetMinutes = dto.getMinutesOffset();
+            int nanos = utcTs.getNanos();
+            int ms = nanos / 1_000_000;
+            if (nanos % 1_000_000 >= 500_000) ms++;
+            LocalDateTime localLdt = utcTs.toInstant()
+                    .atZone(ZoneOffset.UTC)
+                    .toLocalDateTime()
+                    .plusMinutes(offsetMinutes);
+            if (ms >= 1000) { localLdt = localLdt.plusSeconds(1); ms -= 1000; }
+            java.sql.Timestamp localTs = java.sql.Timestamp.valueOf(localLdt);
+            return localTs.toString().replaceFirst("\\.\\d+$", "")
+                    + "." + String.format("%03d", ms);
+        }
         if (val instanceof java.time.OffsetDateTime odt) {
-            // normalize to UTC
-            java.time.Instant instant = odt.toInstant();
-            java.sql.Timestamp ts = java.sql.Timestamp.from(instant);
+            // normalize to local datetime (not UTC) — TiDB DATETIME stores local time,
+            // and the dump format drops the offset
+            java.sql.Timestamp ts = java.sql.Timestamp.valueOf(odt.toLocalDateTime());
             int nanos = odt.getNano();
             int ms = nanos / 1_000_000;
             if (nanos % 1_000_000 >= 500_000) ms++;
