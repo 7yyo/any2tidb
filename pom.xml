@@ -17,6 +17,7 @@
 
     <properties>
         <java.version>17</java.version>
+        <excludedGroups>integration</excludedGroups>
     </properties>
 
     <dependencies>
@@ -91,6 +92,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
+                    <excludedGroups>${excludedGroups}</excludedGroups>
                     <forkCount>1C</forkCount>
                     <reuseForks>true</reuseForks>
                     <argLine>@{argLine} -Dnet.bytebuddy.experimental=true --add-opens java.sql/java.sql=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED</argLine>
