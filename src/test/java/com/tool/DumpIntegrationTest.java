@@ -154,24 +154,144 @@ class DumpIntegrationTest {
         DumpStep dumpStep = new DumpStep(config,
                 driver.schemaExtractor(),
                 driver.dumpExtractor(),
-                () -> new CsvDumpWriter(Long.MAX_VALUE), // no file splitting
+                () -> new CsvDumpWriter(Long.MAX_VALUE),
                 driver.consistencyProvider(),
                 driver);
 
         StepContext ctx = new StepContext();
         ctx.put("databases", List.of(TEST_DB));
         ctx.put("dumpOutputDir", OUTPUT_DIR);
-        ctx.put("dumpFileSizeMb", 0);      // 0 = no size limit
+        ctx.put("dumpFileSizeMb", 0);
         ctx.put("dumpChunkSize", 200000);
         ctx.put("dumpConcurrency", 2);
 
         StepResult result = dumpStep.execute(ctx);
-        assertThat(result.isFatal()).isFalse();
+        assertThat(result.isFatal())
+                .as("dump should succeed: " + result.message())
+                .isFalse();
 
-        // Verify dump output files exist
         Path dumpDir = Path.of(OUTPUT_DIR, TEST_DB);
         assertThat(Files.exists(dumpDir)).isTrue();
-        assertThat(Files.list(dumpDir).count()).isGreaterThanOrEqualTo(2);
+
+        // 2. Generate LOAD DATA SQL from dump output
+        StringBuilder loadSql = new StringBuilder();
+        loadSql.append("DROP DATABASE IF EXISTS " + TEST_DB + ";\n");
+        loadSql.append("CREATE DATABASE " + TEST_DB + ";\n");
+        loadSql.append("USE " + TEST_DB + ";\n");
+
+        // Discover all .csv files in dump dir
+        List<Path> csvFiles = new ArrayList<>();
+        try (var stream = Files.list(dumpDir)) {
+            stream.filter(p -> p.toString().endsWith(".csv"))
+                  .sorted()
+                  .forEach(csvFiles::add);
+        }
+
+        // Generate CREATE TABLE statements for the test tables
+        loadSql.append("""
+            CREATE TABLE dump_test_types (
+                id INT PRIMARY KEY,
+                col_bigint BIGINT,
+                col_decimal DECIMAL(18,4),
+                col_float DOUBLE,
+                col_money DECIMAL(19,4),
+                col_bit TINYINT(1),
+                col_date DATE,
+                col_time TIME(0),
+                col_datetime DATETIME,
+                col_datetime2_0 DATETIME,
+                col_datetime2_7 DATETIME(6),
+                col_datetimeoffset DATETIME(3),
+                col_char CHAR(10),
+                col_varchar VARCHAR(50),
+                col_nvarchar VARCHAR(25) CHARACTER SET utf8mb4,
+                col_text LONGTEXT,
+                col_null_str VARCHAR(20) NULL,
+                col_guid VARCHAR(36)
+            );
+            """);
+        loadSql.append("""
+            CREATE TABLE dump_test_simple (
+                id INT PRIMARY KEY,
+                val DECIMAL(10,2),
+                name VARCHAR(100)
+            );
+            """);
+
+        // Add LOAD DATA for each CSV
+        for (Path csv : csvFiles) {
+            String tableName = extractTableName(csv.getFileName().toString());
+            loadSql.append("LOAD DATA LOCAL INFILE '")
+                   .append(csv.toAbsolutePath())
+                   .append("' INTO TABLE ")
+                   .append(tableName)
+                   .append(" FIELDS TERMINATED BY ',' ENCLOSED BY '\"'")
+                   .append(" LINES TERMINATED BY '\\r\\n';\n");
+        }
+
+        // Write load.sql
+        Path loadSqlFile = Path.of(OUTPUT_DIR, "load.sql");
+        Files.writeString(loadSqlFile, loadSql.toString());
+
+        // 3. Execute mysql CLI
+        ProcessBuilder pb = new ProcessBuilder(
+                "mysql", "-h", TIDB_HOST, "-P", String.valueOf(TIDB_PORT),
+                "-u", TIDB_USER,
+                "--default-character-set=utf8mb4",
+                "-e", "source " + loadSqlFile.toAbsolutePath());
+        Map<String, String> env = pb.environment();
+        if (TIDB_PASS != null && !TIDB_PASS.isEmpty()) {
+            env.put("MYSQL_PWD", TIDB_PASS);
+        }
+        pb.redirectErrorStream(true);
+        Process proc = pb.start();
+        String procOutput = new String(proc.getInputStream().readAllBytes());
+        int exitCode = proc.waitFor();
+        assertThat(exitCode)
+                .as("mysql LOAD DATA failed:\n" + procOutput)
+                .isEqualTo(0);
+
+        // 4. Compare source vs TiDB
+        String ssUrl = "jdbc:sqlserver://" + SS_HOST + ":" + SS_PORT
+                + ";encrypt=false;database=" + TEST_DB;
+        String tidbUrl = "jdbc:mysql://" + TIDB_HOST + ":" + TIDB_PORT
+                + "/" + TEST_DB + "?rewriteBatchedStatements=true";
+
+        try (Connection srcConn = DriverManager.getConnection(ssUrl, SS_USER, SS_PASS);
+             Connection tgtConn = DriverManager.getConnection(tidbUrl, TIDB_USER, TIDB_PASS)) {
+
+            DataComparator cmp = new JdbcDataComparator();
+            ComparisonReport r = cmp.compare(srcConn, tgtConn,
+                    ComparisonConfig.defaults(TEST_DB));
+
+            if (r.hasMismatches()) {
+                for (TableComparison t : r.mismatched()) {
+                    System.err.println("[MIS] " + t.fullName()
+                            + " src=" + t.rowCountSrc() + " tgt=" + t.rowCountTgt());
+                    for (ColumnDiff d : t.columnDiffs()) {
+                        System.err.println("  " + TableComparison.formatPk(d.pkValues()));
+                        for (ColumnDiff.Diff diff : d.diffs()) {
+                            System.err.println("    " + diff.column()
+                                    + ": src=" + diff.srcValue() + " tgt=" + diff.tgtValue());
+                        }
+                    }
+                }
+            }
+
+            assertThat(r.hasMismatches())
+                    .as("dump data mismatch: " + r.mismatchedTables() + " tables differ")
+                    .isFalse();
+            assertThat(r.skippedTables())
+                    .as("some tables were skipped")
+                    .isEqualTo(0);
+        }
+    }
+
+    /** Extract table name from CSV filename like "dump_test_db.dump_test_types.000000000.csv" */
+    private static String extractTableName(String filename) {
+        // Format: <db>.<table>.<chunk>.csv
+        String[] parts = filename.replace(".csv", "").split("\\.");
+        return parts[1]; // second segment is table name
     }
 
     private static void deleteDir(Path dir) throws IOException {
