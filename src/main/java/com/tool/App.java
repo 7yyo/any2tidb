@@ -361,6 +361,8 @@ public class App implements ApplicationRunner {
             DataSource targetDs = createTargetDataSource();
             try {
                 new SnapshotRunner(config, targetDs, driver).run(args, databases, tables);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println("Error: " + e.getMessage());
             } finally {
                 closeDataSource(targetDs);
             }
@@ -371,6 +373,8 @@ public class App implements ApplicationRunner {
             DataSource targetDs = createTargetDataSource();
             try {
                 new SyncRunner(config, targetDs, driver).run(args);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println("Error: " + e.getMessage());
             } finally {
                 closeDataSource(targetDs);
             }
@@ -395,8 +399,12 @@ public class App implements ApplicationRunner {
         List<String> databases = parseListOption(args, "databases");
         List<String> tables    = parseListOption(args, "tables");
 
-        new SchemaDumpRunner(config, extractor, converter, writer, verifier, driver)
-                .run(args, mode, databases, tables, dryRun, dropIfExists, continueOnError);
+        try {
+            new SchemaDumpRunner(config, extractor, converter, writer, verifier, driver)
+                    .run(args, mode, databases, tables, dryRun, dropIfExists, continueOnError);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            System.err.println("Error: " + e.getMessage());
+        }
     }
 
     private void runLoadGen(ApplicationArguments args) throws Exception {
