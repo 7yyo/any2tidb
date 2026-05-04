@@ -362,7 +362,9 @@ public class App implements ApplicationRunner {
             try {
                 new SnapshotRunner(config, targetDs, driver).run(args, databases, tables);
             } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println();
                 System.err.println("Error: " + e.getMessage());
+                System.err.println();
             } finally {
                 closeDataSource(targetDs);
             }
@@ -374,7 +376,9 @@ public class App implements ApplicationRunner {
             try {
                 new SyncRunner(config, targetDs, driver).run(args);
             } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println();
                 System.err.println("Error: " + e.getMessage());
+                System.err.println();
             } finally {
                 closeDataSource(targetDs);
             }
@@ -403,7 +407,9 @@ public class App implements ApplicationRunner {
             new SchemaDumpRunner(config, extractor, converter, writer, verifier, driver)
                     .run(args, mode, databases, tables, dryRun, dropIfExists, continueOnError);
         } catch (IllegalArgumentException | IllegalStateException e) {
+            System.err.println();
             System.err.println("Error: " + e.getMessage());
+            System.err.println();
         }
     }
 
@@ -441,9 +447,12 @@ public class App implements ApplicationRunner {
                     .sorted()
                     .toList();
             if (taskDirs.isEmpty()) {
+                System.out.println();
                 System.out.println("No tasks found.");
+                System.out.println();
                 return;
             }
+            System.out.println();
             System.out.printf("%-20s %-12s %-15s %-15s %s%n",
                     "TASK", "STATE", "SOURCE", "TARGET", "PROGRESS");
             System.out.println("-".repeat(90));
@@ -471,8 +480,11 @@ public class App implements ApplicationRunner {
                     System.out.printf("%-20s %-12s %s%n", name, "error", e.getMessage());
                 }
             }
+            System.out.println();
         } catch (Exception e) {
+            System.out.println();
             System.out.println("Error listing tasks: " + e.getMessage());
+            System.out.println();
         }
     }
 
@@ -481,6 +493,7 @@ public class App implements ApplicationRunner {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             TaskMeta m = tm.status(name);
 
+            System.out.println();
             System.out.println("TASK: " + m.getTask());
             System.out.println();
             TaskMeta.SourceInfo src = m.getSource();
@@ -532,8 +545,11 @@ public class App implements ApplicationRunner {
                     System.out.println("  - " + err);
                 }
             }
+            System.out.println();
         } catch (Exception e) {
+            System.out.println();
             System.out.println("Error: " + e.getMessage());
+            System.out.println();
         }
     }
 
