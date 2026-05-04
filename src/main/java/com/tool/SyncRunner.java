@@ -61,10 +61,13 @@ class SyncRunner {
         ctx.put("syncConfig", syncConfig);
 
         // Task support — mandatory
-        if (!args.containsOption("task")) {
+        if (!args.containsOption("task") || args.getOptionValues("task").isEmpty()) {
             throw new IllegalArgumentException("--task=NAME is required");
         }
         String taskName = args.getOptionValues("task").get(0);
+        if (taskName == null || taskName.isBlank()) {
+            throw new IllegalArgumentException("--task=NAME requires a non-empty name");
+        }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
         TaskMeta meta = taskManager.resume(taskName);
         String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
