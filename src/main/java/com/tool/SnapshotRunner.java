@@ -65,50 +65,49 @@ class SnapshotRunner {
         ctx.put("pollIntervalMs", pollIntervalMs);
         ctx.put("offsetCommitIntervalMs", offsetCommitIntervalMs);
 
-        // Task support
-        TaskManager taskManager = null;
-        String taskName = null;
-        if (args.containsOption("task")) {
-            taskName = args.getOptionValues("task").get(0);
-            taskManager = new TaskManager(Path.of("tasks"));
-            TaskMeta meta;
-            if (Files.exists(taskManager.getTaskDir(taskName))) {
-                meta = taskManager.resume(taskName);
-                String currentState = meta.getState().toValue();
-                if (!"created".equals(currentState) && !"snapshotting".equals(currentState)) {
-                    throw new IllegalStateException("Task " + taskName + " is in state " + currentState
-                            + ", expected created or snapshotting.");
-                }
-            } else {
-                meta = taskManager.create(taskName, "sqlserver");
-                meta.setDatabases(databases != null ? databases : List.of());
-                // Set source/target from config
-                TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
-                src.setType("sqlserver");
-                src.setHost(config.getSource().getHost());
-                src.setPort(config.getSource().getPort());
-                src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
-                meta.setSource(src);
-                TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-                tgt.setType("tidb");
-                tgt.setHost(config.getTarget().getHost());
-                tgt.setPort(config.getTarget().getPort());
-                tgt.setDatabase("");
-                meta.setTarget(tgt);
-                taskManager.writeMeta(taskName, meta);
-            }
-            taskManager.transition(taskName, TaskState.SNAPSHOTTING);
-            App.resolveTaskPaths(taskName, taskManager, ctx);
-            // SyncRunner needs these paths too
-            if (ctx.get("offsetStoragePath", String.class) != null) {
-                offsetStoragePath = ctx.get("offsetStoragePath", String.class);
-            }
-            if (ctx.get("schemaHistoryPath", String.class) != null) {
-                schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
-            }
-            ctx.put("taskManager", taskManager);
-            ctx.put("taskName", taskName);
+        // Task support — mandatory
+        if (!args.containsOption("task")) {
+            throw new IllegalArgumentException("--task=NAME is required");
         }
+        String taskName = args.getOptionValues("task").get(0);
+        TaskManager taskManager = new TaskManager(Path.of("tasks"));
+        TaskMeta meta;
+        if (Files.exists(taskManager.getTaskDir(taskName))) {
+            meta = taskManager.resume(taskName);
+            String currentState = meta.getState().toValue();
+            if (!"created".equals(currentState) && !"snapshotting".equals(currentState)) {
+                throw new IllegalStateException("Task " + taskName + " is in state " + currentState
+                        + ", expected created or snapshotting.");
+            }
+        } else {
+            meta = taskManager.create(taskName, "sqlserver");
+            meta.setDatabases(databases != null ? databases : List.of());
+            // Set source/target from config
+            TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
+            src.setType("sqlserver");
+            src.setHost(config.getSource().getHost());
+            src.setPort(config.getSource().getPort());
+            src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
+            meta.setSource(src);
+            TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+            tgt.setType("tidb");
+            tgt.setHost(config.getTarget().getHost());
+            tgt.setPort(config.getTarget().getPort());
+            tgt.setDatabase("");
+            meta.setTarget(tgt);
+            taskManager.writeMeta(taskName, meta);
+        }
+        taskManager.transition(taskName, TaskState.SNAPSHOTTING);
+        App.resolveTaskPaths(taskName, taskManager, ctx);
+        // Task dir provides defaults; CLI flags can override
+        if (offsetStoragePath == null) {
+            offsetStoragePath = ctx.get("offsetStoragePath", String.class);
+        }
+        if (schemaHistoryPath == null) {
+            schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
+        }
+        ctx.put("taskManager", taskManager);
+        ctx.put("taskName", taskName);
         if (offsetStoragePath != null) ctx.put("offsetStoragePath", offsetStoragePath);
         if (schemaHistoryPath != null) ctx.put("schemaHistoryPath", schemaHistoryPath);
 
@@ -119,16 +118,14 @@ class SnapshotRunner {
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);
 
-        if (taskManager != null) {
-            try {
-                if (!result.isFatal()) {
-                    taskManager.transition(taskName, TaskState.SNAPSHOT);
-                } else {
-                    taskManager.fail(taskName, result.message());
-                }
-            } finally {
-                taskManager.unlock();
+        try {
+            if (!result.isFatal()) {
+                taskManager.transition(taskName, TaskState.SNAPSHOT);
+            } else {
+                taskManager.fail(taskName, result.message());
             }
+        } finally {
+            taskManager.unlock();
         }
     }
 }

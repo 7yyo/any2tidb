@@ -199,7 +199,7 @@ public class App implements ApplicationRunner {
         if ("schema".equals(mode)) {
             System.out.println("  --dry-run                 Print DDL without executing (default: false)");
             System.out.println("  --drop-if-exists          DROP existing tables before creating (default: false)");
-            System.out.println("  --task=NAME               Task namespace for instance isolation");
+            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("dump".equals(mode)) {
             System.out.println("  --output-dir=PATH         Output directory (default: dump-output)");
@@ -207,7 +207,7 @@ public class App implements ApplicationRunner {
             System.out.println("  --chunk-size=N            Rows per PK-range chunk (default: 200000)");
             System.out.println("  --concurrency=N           Concurrent table exports (default: 4)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
-            System.out.println("  --task=NAME               Task namespace for instance isolation");
+            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("snapshot".equals(mode)) {
             System.out.println("  --databases=db1,db2,...   Only process specified databases (default: all)");
@@ -221,14 +221,14 @@ public class App implements ApplicationRunner {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
-            System.out.println("  --task=NAME               Task namespace for instance isolation");
+            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("sync".equals(mode)) {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
             System.out.println("  --meta-file=PATH          Snapshot meta JSON file (default: snapshot-meta.json)");
-            System.out.println("  --task=NAME               Task namespace for instance isolation");
+            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("loadgen".equals(mode)) {
             System.out.println("  --database=NAME           Source database, e.g. HRDB (required)");

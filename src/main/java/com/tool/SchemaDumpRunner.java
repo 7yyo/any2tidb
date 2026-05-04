@@ -70,40 +70,39 @@ class SchemaDumpRunner {
         ctx.put("dropIfExists", dropIfExists);
         ctx.put("continueOnError", continueOnError);
 
-        // Task support
-        TaskManager taskManager = null;
-        String taskName = null;
-        if (args.containsOption("task")) {
-            taskName = args.getOptionValues("task").get(0);
-            taskManager = new TaskManager(Path.of("tasks"));
-            TaskMeta meta;
-            if (Files.exists(taskManager.getTaskDir(taskName))) {
-                meta = taskManager.resume(taskName);
-            } else {
-                meta = taskManager.create(taskName, "sqlserver");
-                if (databases != null && !databases.isEmpty()) {
-                    meta.setDatabases(new ArrayList<>(databases));
-                }
-                // Set source/target from config
-                TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
-                src.setType("sqlserver");
-                src.setHost(config.getSource().getHost());
-                src.setPort(config.getSource().getPort());
-                src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
-                meta.setSource(src);
-                TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-                tgt.setType("tidb");
-                tgt.setHost(config.getTarget().getHost());
-                tgt.setPort(config.getTarget().getPort());
-                tgt.setDatabase("");
-                meta.setTarget(tgt);
-                taskManager.writeMeta(taskName, meta);
-            }
-            App.resolveTaskPaths(taskName, taskManager, ctx);
-            taskManager.transition(taskName, TaskState.DUMPING);
-            ctx.put("taskManager", taskManager);
-            ctx.put("taskName", taskName);
+        // Task support — mandatory
+        if (!args.containsOption("task")) {
+            throw new IllegalArgumentException("--task=NAME is required");
         }
+        String taskName = args.getOptionValues("task").get(0);
+        TaskManager taskManager = new TaskManager(Path.of("tasks"));
+        TaskMeta meta;
+        if (Files.exists(taskManager.getTaskDir(taskName))) {
+            meta = taskManager.resume(taskName);
+        } else {
+            meta = taskManager.create(taskName, "sqlserver");
+            if (databases != null && !databases.isEmpty()) {
+                meta.setDatabases(new ArrayList<>(databases));
+            }
+            // Set source/target from config
+            TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
+            src.setType("sqlserver");
+            src.setHost(config.getSource().getHost());
+            src.setPort(config.getSource().getPort());
+            src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
+            meta.setSource(src);
+            TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+            tgt.setType("tidb");
+            tgt.setHost(config.getTarget().getHost());
+            tgt.setPort(config.getTarget().getPort());
+            tgt.setDatabase("");
+            meta.setTarget(tgt);
+            taskManager.writeMeta(taskName, meta);
+        }
+        App.resolveTaskPaths(taskName, taskManager, ctx);
+        taskManager.transition(taskName, TaskState.DUMPING);
+        ctx.put("taskManager", taskManager);
+        ctx.put("taskName", taskName);
 
         List<MigrationStep> steps = new ArrayList<>();
         steps.add(new PreCheckStep(config, driver));
@@ -136,16 +135,14 @@ class SchemaDumpRunner {
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);
 
-        if (taskManager != null) {
-            try {
-                if (!result.isFatal()) {
-                    taskManager.transition(taskName, TaskState.DUMPED);
-                } else {
-                    taskManager.fail(taskName, result.message());
-                }
-            } finally {
-                taskManager.unlock();
+        try {
+            if (!result.isFatal()) {
+                taskManager.transition(taskName, TaskState.DUMPED);
+            } else {
+                taskManager.fail(taskName, result.message());
             }
+        } finally {
+            taskManager.unlock();
         }
     }
 

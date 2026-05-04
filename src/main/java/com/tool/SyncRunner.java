@@ -60,33 +60,32 @@ class SyncRunner {
         ctx.put("dryRun", false);
         ctx.put("syncConfig", syncConfig);
 
-        // Task support
-        TaskManager taskManager = null;
-        String taskName = null;
-        if (args.containsOption("task")) {
-            taskName = args.getOptionValues("task").get(0);
-            taskManager = new TaskManager(Path.of("tasks"));
-            TaskMeta meta = taskManager.resume(taskName);
-            String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
-            if (!"snapshot".equals(currentState) && !"syncing".equals(currentState)) {
-                throw new IllegalStateException("Task " + taskName + " is in state " + currentState
-                        + ", expected snapshot. Run snapshot first.");
-            }
-            taskManager.transition(taskName, TaskState.SYNCING);
-            App.resolveTaskPaths(taskName, taskManager, ctx);
-            // Override syncConfig paths from task dir
-            String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
-            String taskHistoryPath = ctx.get("schemaHistoryPath", String.class);
-            if (taskOffsetPath != null) {
-                syncConfig = syncConfig.withOffsetStoragePath(taskOffsetPath);
-            }
-            if (taskHistoryPath != null) {
-                syncConfig = syncConfig.withSchemaHistoryPath(taskHistoryPath);
-            }
-            ctx.put("syncConfig", syncConfig);
-            ctx.put("taskManager", taskManager);
-            ctx.put("taskName", taskName);
+        // Task support — mandatory
+        if (!args.containsOption("task")) {
+            throw new IllegalArgumentException("--task=NAME is required");
         }
+        String taskName = args.getOptionValues("task").get(0);
+        TaskManager taskManager = new TaskManager(Path.of("tasks"));
+        TaskMeta meta = taskManager.resume(taskName);
+        String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
+        if (!"snapshot".equals(currentState) && !"syncing".equals(currentState)) {
+            throw new IllegalStateException("Task " + taskName + " is in state " + currentState
+                    + ", expected snapshot. Run snapshot first.");
+        }
+        taskManager.transition(taskName, TaskState.SYNCING);
+        App.resolveTaskPaths(taskName, taskManager, ctx);
+        // Override syncConfig paths from task dir
+        String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
+        String taskHistoryPath = ctx.get("schemaHistoryPath", String.class);
+        if (taskOffsetPath != null) {
+            syncConfig = syncConfig.withOffsetStoragePath(taskOffsetPath);
+        }
+        if (taskHistoryPath != null) {
+            syncConfig = syncConfig.withSchemaHistoryPath(taskHistoryPath);
+        }
+        ctx.put("syncConfig", syncConfig);
+        ctx.put("taskManager", taskManager);
+        ctx.put("taskName", taskName);
 
         List<MigrationStep> steps = new ArrayList<>();
         steps.add(new PreCheckStep(config, sourceDriver));
@@ -95,15 +94,13 @@ class SyncRunner {
         StepResult result = new MigrationPipeline(steps).run(ctx);
         App.handleResult(result, ctx);
 
-        if (taskManager != null) {
-            try {
-                if (result.isFatal()) {
-                    taskManager.fail(taskName, result.message());
-                }
-                // Note: SYNCING has no terminal success state — sync runs until stopped
-            } finally {
-                taskManager.unlock();
+        try {
+            if (result.isFatal()) {
+                taskManager.fail(taskName, result.message());
             }
+            // Note: SYNCING has no terminal success state — sync runs until stopped
+        } finally {
+            taskManager.unlock();
         }
     }
 }
