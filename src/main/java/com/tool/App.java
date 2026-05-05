@@ -473,9 +473,15 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
 
-            String fmt = "%-24s %-10s %-10s %-22s %s%n";
-            System.out.printf(fmt, "TASK", "MODE", "STATUS", "SOURCE", "TARGET");
-            System.out.println("-".repeat(76));
+            String fmt = "%-24s %-10s %-10s %-22s %-22s%n";
+            String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET"};
+            int[] w     = {24, 10, 10, 22, 22};
+            System.out.printf(fmt, (Object[]) cols);
+            for (int i = 0; i < w.length; i++) {
+                System.out.print("-".repeat(w[i]));
+                if (i < w.length - 1) System.out.print(" ");
+            }
+            System.out.println();
 
             TaskManager tm = new TaskManager(tasksRoot);
             for (String name : taskDirs) {
