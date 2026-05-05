@@ -9,10 +9,6 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Manages task lifecycle with file-based locking for cross-process isolation.
- * Not thread-safe — each TaskManager instance is single-use per task.
- */
 public class TaskManager {
 
     private static final ObjectMapper MAPPER = new ObjectMapper()
@@ -26,40 +22,54 @@ public class TaskManager {
         this.tasksRoot = tasksRoot;
     }
 
-    public TaskMeta create(String taskName, String sourceType) throws Exception {
+    public TaskMeta create(String taskName, String mode, String sourceType) throws Exception {
         Path taskDir = tasksRoot.resolve(taskName);
+        if (Files.exists(taskDir)) {
+            throw new IllegalArgumentException("Task '" + taskName + "' already exists. " +
+                    "Use a different name or delete the existing task first.");
+        }
         Files.createDirectories(taskDir);
 
         acquireLock(taskDir, taskName);
 
-        // Write PID for diagnostics
         String pid = String.valueOf(ProcessHandle.current().pid());
         Files.writeString(taskDir.resolve(".pid"), pid);
 
-        // Subdirectories
         Files.createDirectories(taskDir.resolve("offsets"));
         Files.createDirectories(taskDir.resolve("history"));
         Files.createDirectories(taskDir.resolve("output"));
 
-        // meta.json
-        TaskMeta meta = TaskMeta.create(taskName, sourceType);
+        TaskMeta meta = TaskMeta.create(taskName, mode, sourceType);
         writeMeta(taskDir, meta);
 
         return meta;
     }
 
-    public TaskMeta resume(String taskName) throws Exception {
+    public void delete(String taskName) throws Exception {
         Path taskDir = tasksRoot.resolve(taskName);
         if (!Files.exists(taskDir)) {
             throw new IllegalArgumentException("Task not found: " + taskName);
         }
 
-        acquireLock(taskDir, taskName);
+        Path lockFile = taskDir.resolve(".lock");
+        if (Files.exists(lockFile)) {
+            try (FileChannel ch = FileChannel.open(lockFile, StandardOpenOption.WRITE);
+                 FileLock l = ch.tryLock()) {
+                if (l == null) {
+                    throw new TaskLockedException(taskName, getLockPid(taskDir));
+                }
+                l.release();
+            } catch (TaskLockedException e) {
+                throw e;
+            } catch (Exception ignored) {
+                throw new TaskLockedException(taskName, getLockPid(taskDir));
+            }
+        }
 
-        Files.writeString(taskDir.resolve(".pid"),
-                String.valueOf(ProcessHandle.current().pid()));
-
-        return readMeta(taskName);
+        try (var stream = Files.walk(taskDir)) {
+            stream.sorted(Comparator.reverseOrder())
+                  .forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
+        }
     }
 
     private void acquireLock(Path taskDir, String taskName) throws Exception {
@@ -86,47 +96,16 @@ public class TaskManager {
         return MAPPER.readValue(metaFile.toFile(), TaskMeta.class);
     }
 
-    public void transition(String taskName, TaskState newState) throws Exception {
-        TaskMeta meta = readMeta(taskName);
-        // transitionTo validates state machine and throws if invalid
-        meta.transitionTo(newState);
+    public TaskMeta status(String taskName) throws Exception {
+        return readMeta(taskName);
+    }
 
-        String now = java.time.Instant.now().toString();
-        String phaseKey = switch (newState) {
-            case DUMPING, DUMPED                -> "dump";
-            case SNAPSHOTTING, SNAPSHOT          -> "snapshot";
-            case SYNCING                        -> "sync";
-            default                             -> null;
-        };
-
-        if (phaseKey != null) {
-            PhaseInfo phase = meta.getPhases().get(phaseKey);
-            if (newState.name().endsWith("ING")) {
-                phase.setState(PhaseState.RUNNING);
-                phase.setStartedAt(now);
-            } else {
-                phase.setState(PhaseState.DONE);
-                phase.setFinishedAt(now);
-            }
-        }
-
+    public void writeMeta(String taskName, TaskMeta meta) throws Exception {
         writeMeta(tasksRoot.resolve(taskName), meta);
     }
 
-    public void fail(String taskName, String error) throws Exception {
-        TaskMeta meta = readMeta(taskName);
-        meta.setState(TaskState.FAILED);
-        meta.getErrors().add(error);
-
-        // Mark current running phase as failed
-        for (PhaseInfo phase : meta.getPhases().values()) {
-            if (phase.getState() == PhaseState.RUNNING) {
-                phase.setState(PhaseState.FAILED);
-                phase.setError(error);
-            }
-        }
-
-        writeMeta(tasksRoot.resolve(taskName), meta);
+    private void writeMeta(Path taskDir, TaskMeta meta) throws Exception {
+        MAPPER.writeValue(taskDir.resolve("meta.json").toFile(), meta);
     }
 
     public List<String> list() throws Exception {
@@ -138,10 +117,6 @@ public class TaskManager {
                     .sorted()
                     .collect(Collectors.toList());
         }
-    }
-
-    public TaskMeta status(String taskName) throws Exception {
-        return readMeta(taskName);
     }
 
     public Path getTaskDir(String taskName) {
@@ -161,13 +136,5 @@ public class TaskManager {
             }
         } catch (IOException ignored) {}
         return "unknown";
-    }
-
-    public void writeMeta(String taskName, TaskMeta meta) throws Exception {
-        writeMeta(tasksRoot.resolve(taskName), meta);
-    }
-
-    private void writeMeta(Path taskDir, TaskMeta meta) throws Exception {
-        MAPPER.writeValue(taskDir.resolve("meta.json").toFile(), meta);
     }
 }
