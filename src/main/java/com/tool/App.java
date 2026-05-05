@@ -495,6 +495,9 @@ public class App implements ApplicationRunner {
                             m.getMode() != null ? m.getMode() : "?",
                             m.getStatus() != null ? m.getStatus() : "?",
                             sourceStr, targetStr);
+                    if ("FAILED".equals(m.getStatus()) && m.getError() != null) {
+                        System.out.println("  \u2514 " + m.getError());
+                    }
                 } catch (Exception e) {
                     System.out.printf(fmt, name, "?", "error", "", "");
                 }
