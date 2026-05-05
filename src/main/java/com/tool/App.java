@@ -546,11 +546,11 @@ public class App implements ApplicationRunner {
     private static String coloredStatus(String status) {
         String padded = String.format("%-8s", status);
         return switch (status) {
-            case "SUCCESS" -> "\033[32m" + padded + "\033[0m";  // green
-            case "FAILED"  -> "\033[31m" + padded + "\033[0m";  // red
-            case "RUNNING" -> "\033[36m" + padded + "\033[0m";  // cyan
-            case "STOPPED" -> "\033[33m" + padded + "\033[0m";  // yellow
-            case "PAUSED"  -> "\033[33m" + padded + "\033[0m";  // yellow
+            case "SUCCESS" -> "\033[1;32m" + padded + "\033[0m";  // bold green
+            case "FAILED"  -> "\033[1;31m" + padded + "\033[0m";  // bold red
+            case "RUNNING" -> "\033[1;36m" + padded + "\033[0m";  // bold cyan
+            case "STOPPED" -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
+            case "PAUSED"  -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
             default        -> padded;
         };
     }
