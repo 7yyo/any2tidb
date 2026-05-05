@@ -507,14 +507,14 @@ public class App implements ApplicationRunner {
             System.out.println();
 
             // Header uses %-8s for STATUS; data rows use %s with pre-padded colored status
-            String hdrFmt = "%-20s %-8s %-8s %-20s %-20s %-14s%n";
-            String rowFmt = "%-20s %-8s %s %-20s %-20s %-14s%n";
+            String hdrFmt = "%-20s  %-8s  %-8s  %-20s  %-20s  %-14s%n";
+            String rowFmt = "%-20s  %-8s  %s  %-20s  %-20s  %-14s%n";
             String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED"};
             int[] w     = {20, 8, 8, 20, 20, 14};
             System.out.printf(hdrFmt, (Object[]) cols);
             for (int i = 0; i < w.length; i++) {
                 System.out.print("-".repeat(w[i]));
-                if (i < w.length - 1) System.out.print(" ");
+                if (i < w.length - 1) System.out.print("  ");
             }
             System.out.println();
 
