@@ -6,6 +6,7 @@ import com.tool.common.FilterUtils;
 import com.tool.config.AppConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import com.tool.logging.Log;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
@@ -143,10 +144,11 @@ public class SnapshotStep implements MigrationStep {
         long totalRows = 0L;
         long startMs = System.currentTimeMillis();
 
+        String taskName = ctx.get("taskName", String.class);
         for (String dbName : dbNames) {
             long dbStartMs = System.currentTimeMillis();
             SnapshotDbResult dbResult = snapshotDatabase(
-                    dbName, tables, cdcChecker, snapshotConfig);
+                    dbName, tables, cdcChecker, snapshotConfig, taskName);
             dbResults.add(dbResult);
             if (!dbResult.isError()) {
                 totalRows += dbResult.rows();
@@ -208,7 +210,7 @@ public class SnapshotStep implements MigrationStep {
         if (!errors.isEmpty()) {
             Log.error(log, "Target TiDB pre-check failed", "count", errors.size());
             for (String err : errors) {
-                Log.error(log, "  " + err);
+                Log.error(log, "target table not ready", "reason", err);
             }
             return StepResult.fatal("target tables not empty or missing — run schema first, or clean target");
         }
@@ -217,7 +219,8 @@ public class SnapshotStep implements MigrationStep {
 
     private SnapshotDbResult snapshotDatabase(String dbName, List<String> tables,
                                                CdcProvider cdcChecker,
-                                               SnapshotConfig snapshotConfig) {
+                                               SnapshotConfig snapshotConfig,
+                                               String taskName) {
         try (Connection conn = DriverManager.getConnection(
                 sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
                 config.getSource().getUsername(),
@@ -243,25 +246,27 @@ public class SnapshotStep implements MigrationStep {
             SnapshotSink sink = new SnapshotSink(batchWriter);
 
             DebeziumEngineFactory factory = new DebeziumEngineFactory(
-                    config.getSource(), sourceDriver.debeziumConnectorClass());
+                    config.getSource(), sourceDriver);
             Log.info(log, "snapshot starting", "database", dbName, "tables", tableList.size());
 
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> engineError = new AtomicReference<>();
 
             DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
-                    dbName, snapshotConfig, tableList, sink, done::countDown);
+                    dbName, snapshotConfig, tableList, sink, taskName, done::countDown);
 
             ExecutorService executor = Executors.newSingleThreadExecutor();
             long finalRows = 0L;
             try {
                 executor.submit(() -> {
+                    MDC.put("task", taskName);
                     try {
                         engine.run();
                     } catch (Throwable t) {
                         engineError.set(t);
                     } finally {
                         done.countDown();
+                        MDC.remove("task");
                     }
                 });
                 // ORDERED guarantees "snapshot=last" arrives after all data.
@@ -274,6 +279,12 @@ public class SnapshotStep implements MigrationStep {
                         long tClose = System.currentTimeMillis();
                         engine.close();
                         Log.info(log, "engine.close() done", "database", dbName, "ms", System.currentTimeMillis() - tClose);
+                        // close() signals stop but run() may still be flushing.
+                        // Wait for runner thread to finish before executor shutdown.
+                        if (!done.await(30, TimeUnit.SECONDS)) {
+                            Log.warn(log, "engine.run() did not return within 30s after close",
+                                    "database", dbName);
+                        }
                         break;
                     }
                     if (System.currentTimeMillis() - startMs > TimeUnit.MINUTES.toMillis(ENGINE_TIMEOUT_MINUTES)) {
@@ -288,13 +299,18 @@ public class SnapshotStep implements MigrationStep {
                 }
             } finally {
                 long t0 = System.currentTimeMillis();
-                executor.shutdownNow();
-                executor.awaitTermination(5, TimeUnit.SECONDS);
+                executor.shutdown();
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    Log.warn(log, "snapshot executor did not exit within 30s, forcing shutdown",
+                            "database", dbName);
+                    executor.shutdownNow();
+                    executor.awaitTermination(5, TimeUnit.SECONDS);
+                }
                 long t1 = System.currentTimeMillis();
                 sink.logTableCounts();
                 finalRows = batchWriter.getTotalRows();
                 Log.info(log, "snapshot data loaded, flushing remaining writes",
-                        "database", dbName);
+                        "database", dbName, "pendingRows", batchWriter.getPendingWrites());
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
                 Log.info(log, "snapshot shutdown", "db", dbName,

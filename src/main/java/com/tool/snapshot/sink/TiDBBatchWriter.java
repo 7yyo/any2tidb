@@ -312,12 +312,11 @@ public class TiDBBatchWriter {
         long errors = tableErrorCounts.getOrDefault(table, 0L);
         long tableMs = now - tableStartMs.getOrDefault(table, startMs);
         double rps = tableMs > 0 ? rowsCount * 1000.0 / tableMs : 0;
-        Long est = tableEstimates.get(table);
 
         List<Object> fields = new ArrayList<>();
         fields.add("db"); fields.add(dbName);
         fields.add("table"); fields.add(table);
-        fields.add("rows"); fields.add(est != null && est > 0 ? formatRows(rowsCount) + "/" + formatRows(est) : formatRows(rowsCount));
+        fields.add("rows"); fields.add(formatRows(rowsCount));
         fields.add("elapsed"); fields.add(formatDuration(tableMs));
         fields.add("speed"); fields.add(formatSpeed(rps));
         if (errors > 0) {
@@ -335,6 +334,15 @@ public class TiDBBatchWriter {
         int n = 0;
         for (var list : buffer.values()) n += list.size();
         return n;
+    }
+
+    /** Estimated total pending writes: buffered rows + in-flight futures × batchSize. */
+    public long getPendingWrites() {
+        long incomplete;
+        synchronized (flushFutures) {
+            incomplete = flushFutures.stream().filter(f -> !f.isDone()).count();
+        }
+        return getBufferedRows() + incomplete * batchSize;
     }
 
     public Map<String, Long> getTableRows() { return new ConcurrentHashMap<>(tableRowCounts); }
