@@ -472,32 +472,57 @@ public class App implements ApplicationRunner {
                 return;
             }
             System.out.println();
-            System.out.printf("%-24s %-10s %-10s %-15s %-15s%n",
-                    "TASK", "MODE", "STATUS", "SOURCE", "TARGET");
-            System.out.println("-".repeat(80));
+
+            // Column widths
+            String fmt = "| %-24s | %-10s | %-10s | %-25s | %-25s |%n";
+            String sep = "+" + "-".repeat(26) + "+" + "-".repeat(12) + "+"
+                    + "-".repeat(12) + "+" + "-".repeat(27) + "+" + "-".repeat(27) + "+";
+
+            System.out.println(sep);
+            System.out.printf(fmt, "TASK", "MODE", "STATUS", "SOURCE", "TARGET");
+            System.out.println(sep);
             TaskManager tm = new TaskManager(tasksRoot);
             for (String name : taskDirs) {
                 try {
                     TaskMeta m = tm.status(name);
                     TaskMeta.SourceInfo src = m.getSource();
                     TaskMeta.TargetInfo tgt = m.getTarget();
-                    String sourceStr = src != null && src.getDatabase() != null && !src.getDatabase().isEmpty() ? src.getDatabase() : "?";
-                    String targetStr = tgt != null && tgt.getDatabase() != null && !tgt.getDatabase().isEmpty() ? tgt.getDatabase() : "?";
-                    System.out.printf("%-24s %-10s %-10s %-15s %-15s%n",
+                    String sourceStr = peerStr(src);
+                    String targetStr = peerStr(tgt);
+                    System.out.printf(fmt,
                             name,
                             m.getMode() != null ? m.getMode() : "?",
                             m.getStatus() != null ? m.getStatus() : "?",
                             sourceStr, targetStr);
                 } catch (Exception e) {
-                    System.out.printf("%-24s %-10s %-10s%n", name, "?", "error");
+                    System.out.printf(fmt, name, "?", "error", "", "");
                 }
             }
+            System.out.println(sep);
             System.out.println();
         } catch (Exception e) {
             System.out.println();
             System.out.println("Error listing tasks: " + e.getMessage());
             System.out.println();
         }
+    }
+
+    private static String peerStr(TaskMeta.SourceInfo s) {
+        if (s == null) return "?";
+        String host = s.getHost() != null && !s.getHost().isEmpty() ? s.getHost() : "";
+        int port = s.getPort();
+        if (host.isEmpty() && port == 0) return "?";
+        String db = s.getDatabase() != null && !s.getDatabase().isEmpty() ? "/" + s.getDatabase() : "";
+        return host + ":" + port + db;
+    }
+
+    private static String peerStr(TaskMeta.TargetInfo t) {
+        if (t == null) return "?";
+        String host = t.getHost() != null && !t.getHost().isEmpty() ? t.getHost() : "";
+        int port = t.getPort();
+        if (host.isEmpty() && port == 0) return "?";
+        String db = t.getDatabase() != null && !t.getDatabase().isEmpty() ? "/" + t.getDatabase() : "";
+        return host + ":" + port + db;
     }
 
     private static void taskShow(String name) {
