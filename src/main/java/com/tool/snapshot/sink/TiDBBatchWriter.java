@@ -181,7 +181,6 @@ public class TiDBBatchWriter {
         int totalFutures = flushFutures.size();
         long waitStartMs = System.currentTimeMillis();
         long lastLogMs = waitStartMs;
-        int remaining = totalFutures;
         int cursor = 0;
         while (cursor < flushFutures.size()) {
             Future<?> f = flushFutures.get(cursor);
@@ -198,14 +197,13 @@ public class TiDBBatchWriter {
                 if (!flushFutures.get(i).isDone()) nowRemaining++;
             }
             long elapsed = System.currentTimeMillis() - waitStartMs;
-            if (nowRemaining > 0 && (nowRemaining != remaining || System.currentTimeMillis() - lastLogMs >= 30_000)) {
+            if (nowRemaining > 0 && System.currentTimeMillis() - lastLogMs >= 30_000) {
                 Log.info(log, "flush progress",
                         "batches", nowRemaining,
                         "rows", "~" + (nowRemaining * batchSize),
                         "elapsed", formatDuration(elapsed));
                 lastLogMs = System.currentTimeMillis();
             }
-            remaining = nowRemaining;
         }
         long tAfterWait = System.currentTimeMillis();
         flushFutures.clear();
