@@ -93,7 +93,6 @@ public class SchemaMigrateStep implements MigrationStep {
         List<String> databases = ctx.get("databases", List.class);
         List<String> tables    = ctx.get("tables",  List.class);
         boolean dropIfExists   = Boolean.TRUE.equals(ctx.get("dropIfExists", Boolean.class));
-        boolean continueOnError= Boolean.TRUE.equals(ctx.get("continueOnError", Boolean.class));
 
         List<String> dbNames;
         try (Connection masterConn = DriverManager.getConnection(
@@ -118,6 +117,8 @@ public class SchemaMigrateStep implements MigrationStep {
         int totalFailed = 0;
         boolean stoppedEarlyGlobal = false;
         boolean stoppedByConflict = false;
+        String lastErrorFrom = null;
+        String lastErrorReason = null;
         List<SummaryPrinter.DbSummary> summaries = new ArrayList<>();
 
         for (String dbName : dbNames) {
@@ -128,7 +129,7 @@ public class SchemaMigrateStep implements MigrationStep {
                  Connection tidbConn = dryRun ? null : openTiDB(dbName)) {
 
                 DbResult dr = migrateOneDb(ssConn, tidbConn, dbName,
-                        databases, tables, dropIfExists, continueOnError, dryRun, ctx);
+                        databases, tables, dropIfExists, dryRun, ctx);
                 totalFailed += dr.failed;
 
                 summaries.add(new SummaryPrinter.DbSummary(
@@ -142,10 +143,12 @@ public class SchemaMigrateStep implements MigrationStep {
                     if (dr.conflictStop()) {
                         Log.error(log, "Stopped early: table name conflict", "db", dbName);
                     } else {
-                        Log.warn(log, "Stopped early (continueOnError=false)", "db", dbName);
+                        Log.warn(log, "Stopped early: " + dr.lastErrorTable() + " — " + dr.lastErrorMessage(), "db", dbName);
                     }
                     stoppedEarlyGlobal = true;
                     stoppedByConflict = dr.conflictStop();
+                    lastErrorFrom = dr.lastErrorTable() != null ? dr.lastErrorTable() : dbName;
+                    lastErrorReason = dr.lastErrorMessage() != null ? dr.lastErrorMessage() : "unknown";
                     break;
                 }
                 if (dryRun && dr.sqlFile() != null) {
@@ -158,8 +161,9 @@ public class SchemaMigrateStep implements MigrationStep {
         ctx.put("totalFailed", totalFailed);
 
         return stoppedEarlyGlobal
-                ? StepResult.fatal(stoppedByConflict ? "stopped early: table name conflict"
-                                                     : "stopped early: continueOnError=false")
+                ? StepResult.fatal(stoppedByConflict
+                        ? "stopped early: table name conflict"
+                        : lastErrorFrom + " — " + lastErrorReason)
                 : StepResult.ok("schema migration complete, failed=" + totalFailed);
     }
 
@@ -167,13 +171,13 @@ public class SchemaMigrateStep implements MigrationStep {
 
     private record DbResult(
             int failed, int warned, int skipped, boolean stoppedEarly, boolean conflictStop,
+            String lastErrorTable, String lastErrorMessage,
             List<String[]> allTables, List<String[]> succeededTables,
             Map<String, ConversionResult> convResults, Path sqlFile) {}
 
     private DbResult migrateOneDb(Connection ssConn, Connection tidbConn,
                                   String dbName, List<String> databases, List<String> tables,
-                                  boolean dropIfExists, boolean continueOnError,
-                                  boolean dryRun, StepContext ctx) throws Exception {
+                                  boolean dropIfExists, boolean dryRun, StepContext ctx) throws Exception {
         List<String[]> tableList = extractor.listTables(ssConn, tables);
         if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
             Log.warn(log, "--tables filter matched nothing, check spelling",
@@ -195,7 +199,7 @@ public class SchemaMigrateStep implements MigrationStep {
             progress.clear();
             Log.error(log, "Table name conflict", "db", dbName);
             conflicts.forEach(line -> Log.error(log, "conflict", "tables", line));
-            return new DbResult(1, 0, 0, true, true, tableList, List.of(), Map.of(), null);
+            return new DbResult(1, 0, 0, true, true, null, null, tableList, List.of(), Map.of(), null);
         }
 
         int total = tableList.size();
@@ -203,6 +207,8 @@ public class SchemaMigrateStep implements MigrationStep {
         List<String[]> succeededTables = new ArrayList<>();
         Map<String, ConversionResult> convResults = new LinkedHashMap<>();
         boolean stopEarly = false;
+        String  lastErrorTable = null;
+        String  lastErrorMessage = null;
         StringBuilder dryRunDdl = dryRun ? new StringBuilder() : null;
 
         for (int i = 0; i < total; i++) {
@@ -232,7 +238,7 @@ public class SchemaMigrateStep implements MigrationStep {
             switch (result.getStatus()) {
                 case OK -> { succeeded++; succeededTables.add(entry); convResults.put(fullName, result); }
                 case WARN -> { succeeded++; warned++; succeededTables.add(entry); convResults.put(fullName, result); }
-                case ERROR -> { failed++; convResults.put(fullName, result); if (!continueOnError) stopEarly = true; }
+                case ERROR -> { failed++; convResults.put(fullName, result); stopEarly = true; lastErrorTable = fullName; lastErrorMessage = result.getErrorMessage(); }
                 case SKIP  -> { skipped++; convResults.put(fullName, result); }
             }
 
@@ -275,6 +281,7 @@ public class SchemaMigrateStep implements MigrationStep {
         }
 
         return new DbResult(failed, warned, skipped, stopEarly, false,
+                lastErrorTable, lastErrorMessage,
                 tableList, succeededTables, convResults, sqlFile);
     }
 
