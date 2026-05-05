@@ -198,7 +198,6 @@ public class App implements ApplicationRunner {
         if (needTask) {
             System.out.println("  --task=NAME               (REQUIRED) Task name for execution record");
         }
-        System.out.println("  --log-level=LEVEL         DEBUG, INFO, WARN, ERROR (default: INFO)");
         if ("schema".equals(mode) || "dump".equals(mode)) {
             System.out.println("  --databases=db1,db2,...   Filter databases, e.g. HRDB,Inventory (default: all)");
             System.out.println("  --tables=t1,t2,...        Migrate only specified tables (default: all)");
@@ -241,6 +240,7 @@ public class App implements ApplicationRunner {
             System.out.println();
             System.out.println("  Targets hr.employees and hr.departments (hardcoded).");
         }
+        System.out.println("  --log-level=LEVEL         DEBUG, INFO, WARN, ERROR (default: INFO)");
         System.out.println();
         System.out.println("Configuration: application.yml in working directory (source/target connection only)");
     }
