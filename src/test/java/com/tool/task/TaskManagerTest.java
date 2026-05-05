@@ -46,8 +46,10 @@ class TaskManagerTest {
         TaskManager tm1 = new TaskManager(tempDir.resolve("tasks"));
         tm1.create("lock-test", "dump", "sqlserver");
 
+        // Duplicate create is rejected (dir already exists) before lock check
         TaskManager tm2 = new TaskManager(tempDir.resolve("tasks"));
-        assertThrows(TaskLockedException.class, () -> tm2.create("lock-test", "dump", "sqlserver"));
+        assertThrows(IllegalArgumentException.class,
+                () -> tm2.create("lock-test", "dump", "sqlserver"));
 
         tm1.unlock();
     }
