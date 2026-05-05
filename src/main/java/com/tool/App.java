@@ -507,10 +507,10 @@ public class App implements ApplicationRunner {
             System.out.println();
 
             // Header uses %-8s for STATUS; data rows use %s with pre-padded colored status
-            String hdrFmt = "%-20s  %-8s  %-8s  %-28s  %-24s  %-14s%n";
-            String rowFmt = "%-20s  %-8s  %s  %-28s  %-24s  %-14s%n";
-            String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED"};
-            int[] w     = {20, 8, 8, 28, 24, 14};
+            String hdrFmt = "%3s  %-20s  %-8s  %-8s  %-28s  %-24s  %-14s%n";
+            String rowFmt = "%3s  %-20s  %-8s  %s  %-28s  %-24s  %-14s%n";
+            String[] cols = {"#", "TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED"};
+            int[] w     = {3, 20, 8, 8, 28, 24, 14};
             System.out.printf(hdrFmt, (Object[]) cols);
             for (int i = 0; i < w.length; i++) {
                 System.out.print("-".repeat(w[i]));
@@ -518,7 +518,9 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
 
+            int idx = 0;
             for (TaskEntry entry : entries) {
+                idx++;
                 TaskMeta m = entry.meta;
                 if (m != null) {
                     String sourceStr = peerStr(m.getSource());
@@ -526,13 +528,14 @@ public class App implements ApplicationRunner {
                     String created = shortTime(m.getCreatedAt());
                     String status = m.getStatus() != null ? m.getStatus() : "?";
                     System.out.printf(rowFmt,
+                            String.valueOf(idx),
                             entry.name,
                             m.getMode() != null ? m.getMode() : "?",
                             coloredStatus(status),
                             sourceStr, targetStr, created);
 
                 } else {
-                    System.out.printf(rowFmt, entry.name, "?", coloredStatus("error"), "", "", "");
+                    System.out.printf(rowFmt, String.valueOf(idx), entry.name, "?", coloredStatus("error"), "", "", "");
                 }
             }
             System.out.println();
