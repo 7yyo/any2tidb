@@ -107,6 +107,7 @@ class SyncRunner {
 
         ctx.put("offsetStoragePath", fromDir.resolve("offsets").toString());
         ctx.put("schemaHistoryPath", fromDir.resolve("history").toString());
+        syncConfig = syncConfig.withMetaFile(fromDir.resolve("snapshot-meta.json").toString());
 
         taskManager.writeMeta(taskName, meta);
 
