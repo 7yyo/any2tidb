@@ -15,6 +15,7 @@ public class TaskMeta {
     private String fromTask;
     private Integer tables;
     private String error;
+    private String pid;
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z");
@@ -84,6 +85,8 @@ public class TaskMeta {
     public void setTables(Integer tables) { this.tables = tables; }
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }
+    public String getPid() { return pid; }
+    public void setPid(String pid) { this.pid = pid; }
 
     public static class SourceInfo {
         private String type;

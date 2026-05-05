@@ -615,6 +615,17 @@ public class App implements ApplicationRunner {
                 }
             }
 
+            // Zombie detection: for RUNNING tasks, check if PID is still alive
+            for (TaskMeta m : metas) {
+                if (m != null && "RUNNING".equals(m.getStatus()) && m.getPid() != null && !m.getPid().isEmpty()) {
+                    if (!isPidAlive(m.getPid())) {
+                        m.setStatus("FAILED");
+                        m.setError("process " + m.getPid() + " terminated unexpectedly");
+                        try { tm.writeMeta(m.getTask(), m); } catch (Exception ignored) {}
+                    }
+                }
+            }
+
             if (metas.isEmpty()) {
                 System.out.println();
                 System.out.println("No tasks found.");
@@ -643,11 +654,11 @@ public class App implements ApplicationRunner {
             }
             int nrW = Math.max(3, String.valueOf(entries.size()).length());
 
-            String hdrFmt = "%-" + nrW + "s  %-" + maxTaskW + "s  %-8s  %-8s  %-" + maxSrcW + "s  %-" + maxTgtW + "s  %-14s%n";
-            String rowFmt = "%-" + nrW + "s  %-" + maxTaskW + "s  %-8s  %s  %-" + maxSrcW + "s  %-" + maxTgtW + "s  %-14s%n";
-            int[] w = {nrW, maxTaskW, 8, 8, maxSrcW, maxTgtW, 14};
+            String hdrFmt = "%-" + nrW + "s  %-" + maxTaskW + "s  %-8s  %-8s  %6s  %-" + maxSrcW + "s  %-" + maxTgtW + "s  %-14s%n";
+            String rowFmt = "%-" + nrW + "s  %-" + maxTaskW + "s  %-8s  %s  %6s  %-" + maxSrcW + "s  %-" + maxTgtW + "s  %-14s%n";
+            int[] w = {nrW, maxTaskW, 8, 8, 6, maxSrcW, maxTgtW, 14};
 
-            System.out.printf(hdrFmt, "#", "TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED");
+            System.out.printf(hdrFmt, "#", "TASK", "MODE", "STATUS", "PID", "SOURCE", "TARGET", "CREATED");
             for (int i = 0; i < w.length; i++) {
                 System.out.print("-".repeat(w[i]));
                 if (i < w.length - 1) System.out.print("  ");
@@ -660,16 +671,18 @@ public class App implements ApplicationRunner {
                 TaskMeta m = entry.meta;
                 if (m != null) {
                     String status = m.getStatus() != null ? m.getStatus() : "?";
+                    String pidStr = m.getPid() != null ? m.getPid() : "-";
                     System.out.printf(rowFmt,
                             String.valueOf(idx),
                             entry.name,
                             m.getMode() != null ? m.getMode() : "?",
                             coloredStatus(status),
+                            pidStr,
                             peerStr(m.getSource()),
                             peerStr(m.getTarget()),
                             shortTime(m.getCreatedAt()));
                 } else {
-                    System.out.printf(rowFmt, String.valueOf(idx), entry.name, "?", coloredStatus("error"), "", "", "");
+                    System.out.printf(rowFmt, String.valueOf(idx), entry.name, "?", coloredStatus("error"), "-", "", "", "");
                 }
             }
             System.out.println();
@@ -691,6 +704,15 @@ public class App implements ApplicationRunner {
             case "DELETED" -> "\033[2;37m" + padded + "\033[0m";   // dim white
             default        -> padded;
         };
+    }
+
+    private static boolean isPidAlive(String pid) {
+        try {
+            long p = Long.parseLong(pid);
+            return ProcessHandle.of(p).map(ProcessHandle::isAlive).orElse(false);
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private static String shortTime(String createdAt) {
@@ -724,7 +746,8 @@ public class App implements ApplicationRunner {
             System.out.println();
             System.out.println("Task:      " + m.getTask());
             System.out.println("Mode:      " + (m.getMode() != null ? m.getMode() : "?"));
-            System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?"));
+            System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?")
+                    + (m.getPid() != null ? " (pid=" + m.getPid() + ")" : ""));
             if (m.getFromTask() != null) {
                 System.out.println("Parent:    " + m.getFromTask());
             }

@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.ArrayList;
@@ -32,6 +33,7 @@ class DbManager {
 
     synchronized void ensureInitialized() throws SQLException {
         if (conn != null) return;
+        dbPath.getParent().toFile().mkdirs();
         conn = DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath());
         try (Statement st = conn.createStatement()) {
             st.execute("PRAGMA journal_mode=WAL");
@@ -44,6 +46,14 @@ class DbManager {
     void close() {
         try { if (conn != null) conn.close(); } catch (SQLException ignored) {}
         conn = null;
+    }
+
+    /** Delete the entire database file. Must call {@link #close()} first. */
+    void deleteDatabase() throws Exception {
+        Files.deleteIfExists(dbPath);
+        // also delete WAL/SHM if present
+        Files.deleteIfExists(Path.of(dbPath + "-wal"));
+        Files.deleteIfExists(Path.of(dbPath + "-shm"));
     }
 
     // ── Schema ────────────────────────────────────────────────────────────
@@ -66,11 +76,15 @@ class DbManager {
                         from_task   TEXT,
                         tables      INTEGER,
                         error       TEXT,
+                        pid         TEXT,
                         created_at  TEXT NOT NULL,
                         started_at  TEXT,
                         finished_at TEXT
                     )
                     """);
+            // Migrate: add pid column for databases created before this feature
+            try { st.execute("ALTER TABLE task ADD COLUMN pid TEXT"); } catch (SQLException ignored) {}
+            try { st.execute("ALTER TABLE task_archive ADD COLUMN pid TEXT"); } catch (SQLException ignored) {}
             st.execute("""
                     CREATE TABLE IF NOT EXISTS snapshot_result (
                         task    TEXT NOT NULL REFERENCES task(task),
@@ -91,21 +105,78 @@ class DbManager {
                         PRIMARY KEY (task, db_name)
                     )
                     """);
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS task_archive (
+                        task        TEXT NOT NULL,
+                        mode        TEXT NOT NULL,
+                        status      TEXT NOT NULL,
+                        source_type TEXT,
+                        source_host TEXT,
+                        source_port INTEGER,
+                        source_db   TEXT,
+                        target_type TEXT,
+                        target_host TEXT,
+                        target_port INTEGER,
+                        target_db   TEXT,
+                        from_task   TEXT,
+                        tables      INTEGER,
+                        error       TEXT,
+                        pid         TEXT,
+                        created_at  TEXT NOT NULL,
+                        started_at  TEXT,
+                        finished_at TEXT,
+                        archived_at TEXT NOT NULL
+                    )
+                    """);
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS task_history (
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task       TEXT NOT NULL,
+                        action     TEXT NOT NULL,
+                        details    TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                    """);
         }
     }
 
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     synchronized void insert(TaskMeta m) throws SQLException {
+        // archive old DELETED row before overwriting
+        TaskMeta old = findByTask(m.getTask());
+        if (old != null && "DELETED".equals(old.getStatus())) {
+            archive(old);
+            try (PreparedStatement ps = conn.prepareStatement("DELETE FROM task WHERE task=?")) {
+                ps.setString(1, m.getTask());
+                ps.executeUpdate();
+            }
+        }
         String sql = """
-                INSERT OR REPLACE INTO task
+                INSERT INTO task
                 (task, mode, status, source_type, source_host, source_port, source_db,
                  target_type, target_host, target_port, target_db,
-                 from_task, tables, error, created_at, started_at, finished_at)
-                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?)
+                 from_task, tables, error, pid, created_at, started_at, finished_at)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?)
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             bind(ps, m);
+            ps.executeUpdate();
+        }
+    }
+
+    private void archive(TaskMeta m) throws SQLException {
+        String sql = """
+                INSERT INTO task_archive
+                (task, mode, status, source_type, source_host, source_port, source_db,
+                 target_type, target_host, target_port, target_db,
+                 from_task, tables, error, pid, created_at, started_at, finished_at, archived_at)
+                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?,?, ?)
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            bind(ps, m);
+            ps.setString(19, java.time.OffsetDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")));
             ps.executeUpdate();
         }
     }
@@ -114,22 +185,25 @@ class DbManager {
         ensureInitialized();
         String sql = """
                 UPDATE task SET
-                    mode=?, status=?, source_type=?, source_host=?, source_port=?, source_db=?,
+                    task=?, mode=?, status=?, source_type=?, source_host=?, source_port=?, source_db=?,
                     target_type=?, target_host=?, target_port=?, target_db=?,
-                    from_task=?, tables=?, error=?, created_at=?, started_at=?, finished_at=?
+                    from_task=?, tables=?, error=?, pid=?, created_at=?, started_at=?, finished_at=?
                 WHERE task=?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             bind(ps, m);
-            ps.setString(17, m.getTask());
+            ps.setString(19, m.getTask());
             ps.executeUpdate();
         }
     }
 
-    synchronized void deleteByTask(String taskName) throws SQLException {
+    synchronized void markDeleted(String taskName) throws SQLException {
         ensureInitialized();
-        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM task WHERE task=?")) {
-            ps.setString(1, taskName);
+        try (PreparedStatement ps = conn.prepareStatement(
+                "UPDATE task SET status='DELETED', finished_at=? WHERE task=?")) {
+            ps.setString(1, java.time.OffsetDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")));
+            ps.setString(2, taskName);
             ps.executeUpdate();
         }
     }
@@ -148,8 +222,34 @@ class DbManager {
         ensureInitialized();
         List<TaskMeta> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery("SELECT * FROM task ORDER BY created_at")) {
+             ResultSet rs = st.executeQuery(
+                     "SELECT * FROM task WHERE status != 'DELETED' ORDER BY created_at DESC")) {
             while (rs.next()) list.add(map(rs));
+        }
+        return list;
+    }
+
+    List<TaskMeta> findDeleted() throws SQLException {
+        ensureInitialized();
+        List<TaskMeta> list = new ArrayList<>();
+        // active soft-deleted tasks
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT * FROM task WHERE status = 'DELETED' ORDER BY finished_at DESC")) {
+            while (rs.next()) list.add(map(rs));
+        }
+        // archived (overwritten) deletions
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT task, mode, status, source_type, source_host, source_port, source_db, "
+                     + "target_type, target_host, target_port, target_db, "
+                     + "from_task, tables, error, created_at, started_at, finished_at "
+                     + "FROM task_archive ORDER BY archived_at DESC")) {
+            while (rs.next()) {
+                TaskMeta m = map(rs);
+                m.setStatus("DELETED");
+                list.add(m);
+            }
         }
         return list;
     }
@@ -226,6 +326,38 @@ class DbManager {
         }
     }
 
+    // ── History (audit trail) ────────────────────────────────────────────────
+
+    record HistoryRow(long id, String task, String action, String details, String createdAt) {}
+
+    synchronized void addHistory(String task, String action, String details) throws SQLException {
+        ensureInitialized();
+        String sql = "INSERT INTO task_history(task, action, details, created_at) VALUES (?,?,?,?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, task);
+            ps.setString(2, action);
+            ps.setString(3, details);
+            ps.setString(4, java.time.OffsetDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")));
+            ps.executeUpdate();
+        }
+    }
+
+    List<HistoryRow> findHistory(String task) throws SQLException {
+        ensureInitialized();
+        List<HistoryRow> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT id, task, action, details, created_at FROM task_history WHERE task=? ORDER BY id")) {
+            ps.setString(1, task);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(new HistoryRow(
+                        rs.getLong("id"), rs.getString("task"), rs.getString("action"),
+                        rs.getString("details"), rs.getString("created_at")));
+            }
+        }
+        return list;
+    }
+
     // ── Bind / Map helpers ────────────────────────────────────────────────
 
     private static void bind(PreparedStatement ps, TaskMeta m) throws SQLException {
@@ -246,9 +378,10 @@ class DbManager {
         ps.setString(12, m.getFromTask());
         if (m.getTables() != null) ps.setInt(13, m.getTables()); else ps.setNull(13, Types.INTEGER);
         ps.setString(14, m.getError());
-        ps.setString(15, m.getCreatedAt());
-        ps.setString(16, m.getStartedAt());
-        ps.setString(17, m.getFinishedAt());
+        ps.setString(15, m.getPid());
+        ps.setString(16, m.getCreatedAt());
+        ps.setString(17, m.getStartedAt());
+        ps.setString(18, m.getFinishedAt());
     }
 
     private static TaskMeta map(ResultSet rs) throws SQLException {
@@ -275,6 +408,7 @@ class DbManager {
         int tables = rs.getInt("tables");
         if (!rs.wasNull()) m.setTables(tables);
         m.setError(rs.getString("error"));
+        m.setPid(rs.getString("pid"));
         m.setCreatedAt(rs.getString("created_at"));
         m.setStartedAt(rs.getString("started_at"));
         m.setFinishedAt(rs.getString("finished_at"));
