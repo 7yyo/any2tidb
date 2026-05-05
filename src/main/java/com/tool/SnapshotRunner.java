@@ -72,7 +72,7 @@ class SnapshotRunner {
             throw new IllegalArgumentException("--task=NAME requires a non-empty name");
         }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta = taskManager.create(taskName, "snapshot", "sqlserver");
+        TaskMeta meta = taskManager.createInteractive(taskName, "snapshot", "sqlserver");
         TaskMeta.SourceInfo src = meta.getSource();
         src.setHost(config.getSource().getHost());
         src.setPort(config.getSource().getPort());

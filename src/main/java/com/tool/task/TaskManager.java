@@ -28,6 +28,40 @@ public class TaskManager {
             throw new IllegalArgumentException("Task '" + taskName + "' already exists. " +
                     "Use a different name or delete the existing task first.");
         }
+        return doCreate(taskName, mode, sourceType);
+    }
+
+    /**
+     * Like {@link #create} but prompts to delete and recreate when a task with
+     * the same name already exists. Falls back to {@link #create} when there is
+     * no console (non-interactive mode).
+     */
+    public TaskMeta createInteractive(String taskName, String mode, String sourceType) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
+        if (Files.exists(taskDir)) {
+            if (System.console() == null) {
+                throw new IllegalArgumentException("Task '" + taskName + "' already exists. " +
+                        "Use a different name or delete the existing task first.");
+            }
+            TaskMeta existing = readMeta(taskName);
+            printTaskInfo(existing);
+            System.out.println();
+            System.out.print("Task '" + taskName + "' already exists. Delete and recreate? [y/N] ");
+            System.out.flush();
+            String answer = System.console().readLine().trim().toLowerCase();
+            if ("y".equals(answer) || "yes".equals(answer)) {
+                delete(taskName);
+            } else {
+                System.out.println("Aborted.");
+                throw new IllegalArgumentException("Task '" + taskName + "' already exists. " +
+                        "Use a different name or delete the existing task first.");
+            }
+        }
+        return doCreate(taskName, mode, sourceType);
+    }
+
+    private TaskMeta doCreate(String taskName, String mode, String sourceType) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
         Files.createDirectories(taskDir);
 
         acquireLock(taskDir, taskName);
@@ -136,5 +170,35 @@ public class TaskManager {
             }
         } catch (IOException ignored) {}
         return "unknown";
+    }
+
+    private static void printTaskInfo(TaskMeta m) {
+        System.out.println();
+        System.out.println("TASK:    " + m.getTask());
+        System.out.println("Mode:    " + (m.getMode() != null ? m.getMode() : "?"));
+        System.out.println("Status:  " + (m.getStatus() != null ? m.getStatus() : "?"));
+        System.out.println("Created: " + m.getCreatedAt());
+        if (m.getFinishedAt() != null) {
+            System.out.println("Finished:" + m.getFinishedAt());
+        }
+        TaskMeta.SourceInfo src = m.getSource();
+        if (src != null) {
+            System.out.printf("Source:  %s %s:%d/%s%n",
+                    src.getType() != null ? src.getType() : "?",
+                    src.getHost() != null ? src.getHost() : "?",
+                    src.getPort(),
+                    src.getDatabase() != null ? src.getDatabase() : "?");
+        }
+        TaskMeta.TargetInfo tgt = m.getTarget();
+        if (tgt != null) {
+            System.out.printf("Target:  %s %s:%d/%s%n",
+                    tgt.getType() != null ? tgt.getType() : "?",
+                    tgt.getHost() != null ? tgt.getHost() : "?",
+                    tgt.getPort(),
+                    tgt.getDatabase() != null ? tgt.getDatabase() : "?");
+        }
+        if (m.getError() != null) {
+            System.out.println("Error:   " + m.getError());
+        }
     }
 }

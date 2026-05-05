@@ -68,7 +68,7 @@ class SchemaRunner {
             throw new IllegalArgumentException("--task=NAME requires a non-empty name");
         }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta = taskManager.create(taskName, "schema", "sqlserver");
+        TaskMeta meta = taskManager.createInteractive(taskName, "schema", "sqlserver");
         TaskMeta.SourceInfo src = meta.getSource();
         src.setHost(config.getSource().getHost());
         src.setPort(config.getSource().getPort());
