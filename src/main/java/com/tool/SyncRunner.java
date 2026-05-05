@@ -67,20 +67,8 @@ class SyncRunner {
         if (taskName == null || taskName.isBlank()) {
             throw new IllegalArgumentException("--task=NAME requires a non-empty name");
         }
-        TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta = taskManager.createInteractive(taskName, "sync", "sqlserver");
-        TaskMeta.SourceInfo src = meta.getSource();
-        src.setHost(config.getSource().getHost());
-        src.setPort(config.getSource().getPort());
-        src.setDatabase("");
-        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-        tgt.setType("tidb");
-        tgt.setHost(config.getTarget().getHost());
-        tgt.setPort(config.getTarget().getPort());
-        tgt.setDatabase("");
-        meta.setTarget(tgt);
 
-        // ── from-task: inherit offset / schema-history from a prior snapshot or dump ──
+        // ── from-task: validate BEFORE creating the sync task ──
         if (!args.containsOption("from-task") || args.getOptionValues("from-task").isEmpty()) {
             throw new IllegalArgumentException("--from-task=NAME is required for sync mode");
         }
@@ -88,6 +76,7 @@ class SyncRunner {
         if (fromTask == null || fromTask.isBlank()) {
             throw new IllegalArgumentException("--from-task=NAME requires a non-empty name");
         }
+        TaskManager taskManager = new TaskManager(Path.of("tasks"));
         Path fromDir = taskManager.getTaskDir(fromTask);
         if (!java.nio.file.Files.exists(fromDir)) {
             throw new IllegalArgumentException("--from-task '" + fromTask + "' not found");
@@ -102,7 +91,20 @@ class SyncRunner {
             Log.warn(log, "--from-task '" + fromTask + "' status is " + parent.getStatus()
                     + ", offsets may be incomplete");
         }
+
+        TaskMeta meta = taskManager.createInteractive(taskName, "sync", "sqlserver");
         meta.setFromTask(fromTask);
+        TaskMeta.SourceInfo src = meta.getSource();
+        src.setHost(config.getSource().getHost());
+        src.setPort(config.getSource().getPort());
+        src.setDatabase("");
+        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+        tgt.setType("tidb");
+        tgt.setHost(config.getTarget().getHost());
+        tgt.setPort(config.getTarget().getPort());
+        tgt.setDatabase("");
+        meta.setTarget(tgt);
+
         ctx.put("offsetStoragePath", fromDir.resolve("offsets").toString());
         ctx.put("schemaHistoryPath", fromDir.resolve("history").toString());
 
