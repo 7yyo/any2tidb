@@ -476,7 +476,6 @@ public class App implements ApplicationRunner {
             var taskDirs = Files.list(tasksRoot)
                     .filter(Files::isDirectory)
                     .map(p -> p.getFileName().toString())
-                    .sorted()
                     .toList();
             if (taskDirs.isEmpty()) {
                 System.out.println();
@@ -484,6 +483,27 @@ public class App implements ApplicationRunner {
                 System.out.println();
                 return;
             }
+
+            // Sort by creation time (oldest first)
+            TaskManager tm = new TaskManager(tasksRoot);
+            record TaskEntry(String name, TaskMeta meta) {}
+            List<TaskEntry> entries = new ArrayList<>();
+            for (String name : taskDirs) {
+                try {
+                    entries.add(new TaskEntry(name, tm.status(name)));
+                } catch (Exception e) {
+                    entries.add(new TaskEntry(name, null));
+                }
+            }
+            entries.sort((a, b) -> {
+                String ta = a.meta != null ? a.meta.getCreatedAt() : "";
+                String tb = b.meta != null ? b.meta.getCreatedAt() : "";
+                if (ta.isEmpty() && tb.isEmpty()) return a.name.compareTo(b.name);
+                if (ta.isEmpty()) return 1;
+                if (tb.isEmpty()) return -1;
+                return ta.compareTo(tb);
+            });
+
             System.out.println();
 
             String fmt = "%-24s %-10s %-10s %-22s %-22s%n";
@@ -496,22 +516,21 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
 
-            TaskManager tm = new TaskManager(tasksRoot);
-            for (String name : taskDirs) {
-                try {
-                    TaskMeta m = tm.status(name);
+            for (TaskEntry entry : entries) {
+                TaskMeta m = entry.meta;
+                if (m != null) {
                     String sourceStr = peerStr(m.getSource());
                     String targetStr = peerStr(m.getTarget());
                     System.out.printf(fmt,
-                            name,
+                            entry.name,
                             m.getMode() != null ? m.getMode() : "?",
                             m.getStatus() != null ? m.getStatus() : "?",
                             sourceStr, targetStr);
                     if ("FAILED".equals(m.getStatus()) && m.getError() != null) {
                         System.out.println("  \u2514 " + m.getError());
                     }
-                } catch (Exception e) {
-                    System.out.printf(fmt, name, "?", "error", "", "");
+                } else {
+                    System.out.printf(fmt, entry.name, "?", "error", "", "");
                 }
             }
             System.out.println();
