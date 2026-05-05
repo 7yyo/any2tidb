@@ -550,7 +550,7 @@ public class App implements ApplicationRunner {
             case "FAILED"  -> "\033[1;31m" + padded + "\033[0m";  // bold red
             case "RUNNING" -> "\033[1;36m" + padded + "\033[0m";  // bold cyan
             case "STOPPED" -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
-            case "PAUSED"  -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
+            case "PAUSED"  -> "\033[1;34m" + padded + "\033[0m";  // bold blue
             default        -> padded;
         };
     }
