@@ -220,6 +220,7 @@ class DbManager {
             try {
                 TaskMeta meta = mapper.readValue(metaFile, TaskMeta.class);
                 insert(meta);
+                metaFile.delete();
                 count++;
             } catch (Exception e) {
                 log.warn("Failed to migrate meta.json for '{}': {}", dir.getName(), e.getMessage());
