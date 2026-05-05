@@ -324,35 +324,20 @@ public class SnapshotStep implements MigrationStep {
 
     private void writeSnapshotMeta(List<SnapshotDbResult> dbResults, long totalRows, StepContext ctx) {
         try {
-            StringBuilder json = new StringBuilder();
-            json.append("{\n");
-            json.append("  \"tool\": \"any2tidb\",\n");
-            json.append("  \"command\": \"snapshot\",\n");
-            json.append("  \"timestamp\": \"").append(Instant.now()).append("\",\n");
-            json.append("  \"databases\": {\n");
-            for (int i = 0; i < dbResults.size(); i++) {
-                SnapshotDbResult db = dbResults.get(i);
-                json.append("    \"").append(db.dbName()).append("\": {\n");
-                json.append("      \"tables\": ").append(db.tables()).append(",\n");
-                json.append("      \"rows\": ").append(db.rows()).append("\n");
-                json.append("    }");
-                if (i < dbResults.size() - 1) json.append(",");
-                json.append("\n");
-            }
-            json.append("  },\n");
-            json.append("  \"totalRows\": ").append(totalRows).append(",\n");
-            int totalTables = dbResults.stream().mapToInt(SnapshotDbResult::tables).sum();
-            json.append("  \"totalTables\": ").append(totalTables).append("\n");
-            json.append("}\n");
             TaskManager tm = ctx.get("taskManager", TaskManager.class);
             String taskName = ctx.get("taskName", String.class);
-            Path metaPath = (tm != null && taskName != null)
-                    ? tm.getTaskDir(taskName).resolve("snapshot-meta.json")
-                    : Path.of("snapshot-meta.json");
-            Files.writeString(metaPath, json);
-            Log.info(log, "snapshot-meta.json written");
+            if (tm != null && taskName != null) {
+                List<TaskManager.SnapshotResult> rows = dbResults.stream()
+                        .map(db -> new TaskManager.SnapshotResult(
+                                db.dbName(), db.tables(), db.rows(),
+                                db.isError() ? db.error() : null))
+                        .toList();
+                tm.writeSnapshotResults(taskName, rows);
+                Log.info(log, "snapshot results written to database",
+                        "databases", dbResults.size(), "totalRows", totalRows);
+            }
         } catch (Exception e) {
-            Log.warn(log, "failed to write snapshot-meta.json", "error", e.getMessage());
+            Log.warn(log, "failed to write snapshot results", "error", e.getMessage());
         }
     }
 

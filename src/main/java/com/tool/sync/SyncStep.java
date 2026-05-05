@@ -63,10 +63,13 @@ public class SyncStep implements MigrationStep {
         SyncConfig syncConfig = ctx.get("syncConfig", SyncConfig.class);
         final SyncConfig cfg = syncConfig != null ? syncConfig : SyncConfig.defaults();
 
-        // 1. Read snapshot results — prefer ctx, fallback to meta file
+        // 1. Read snapshot results — prefer ctx, then DB, fallback to meta file
         List<SnapshotDbResult> dbResults = ctx.get("snapshotSummaries", List.class);
         if (dbResults == null || dbResults.isEmpty()) {
-            dbResults = readSnapshotMeta(cfg.metaFile());
+            dbResults = readSnapshotFromDb(ctx);
+        }
+        if (dbResults.isEmpty()) {
+            dbResults = readSnapshotMetaFile(cfg.metaFile());
         }
         if (dbResults.isEmpty()) {
             return StepResult.fatal("No snapshot results found. Run snapshot first, or provide --meta-file.");
@@ -421,9 +424,38 @@ public class SyncStep implements MigrationStep {
         }
     }
 
-    // ── snapshot meta fallback ───────────────────────────────────────────────
+    // ── snapshot meta ─────────────────────────────────────────────────────
 
-    private List<SnapshotDbResult> readSnapshotMeta(String path) {
+    private List<SnapshotDbResult> readSnapshotFromDb(StepContext ctx) {
+        List<SnapshotDbResult> results = new ArrayList<>();
+        try {
+            TaskManager tm = ctx.get("taskManager", TaskManager.class);
+            String taskName = ctx.get("taskName", String.class);
+            if (tm == null || taskName == null) return results;
+
+            TaskMeta meta = tm.readMeta(taskName);
+            String fromTask = meta.getFromTask();
+            if (fromTask == null) return results;
+
+            List<TaskManager.SnapshotResult> rows = tm.readSnapshotResults(fromTask);
+            for (TaskManager.SnapshotResult r : rows) {
+                results.add(new SnapshotDbResult(
+                        r.dbName(), r.tables(), r.rows(),
+                        Instant.now(), r.error()));
+            }
+            if (!results.isEmpty()) {
+                Log.info(log, "read snapshot results from database",
+                        "fromTask", fromTask, "databases", results.size());
+            }
+        } catch (Exception e) {
+            Log.warn(log, "failed to read snapshot results from DB, will try file fallback",
+                    "error", e.getMessage());
+        }
+        return results;
+    }
+
+    /** File-based fallback for backward compatibility with old snapshot-meta.json. */
+    private List<SnapshotDbResult> readSnapshotMetaFile(String path) {
         List<SnapshotDbResult> results = new ArrayList<>();
         File file = new File(path);
         if (!file.exists()) return results;

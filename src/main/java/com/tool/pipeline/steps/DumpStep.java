@@ -3,6 +3,7 @@ package com.tool.pipeline.steps;
 import com.tool.common.FilterUtils;
 import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
+import com.tool.task.TaskManager;
 import com.tool.dump.extractor.PkRange;
 import com.tool.dump.writer.CsvDumpWriter;
 import com.tool.dump.writer.DumpWriter;
@@ -169,7 +170,7 @@ public class DumpStep implements MigrationStep {
             dbRowCounts.putIfAbsent(db, 0L);
         }
 
-        writeDumpMeta(outputRoot, startLsnByDb, startTime,
+        writeDumpMeta(ctx, startLsnByDb, startTime,
                 dbTableCounts, dbRowCounts);
         // Write Debezium offset files for sync continuity
         writeOffsetsForSync(outputRoot, startLsnByDb, offsetStoragePath);
@@ -401,37 +402,25 @@ public class DumpStep implements MigrationStep {
 
     // ── dump-meta.json ───────────────────────────────────────────────────────
 
-    void writeDumpMeta(Path outputRoot, Map<String, String> startLsnByDb, String startTime,
+    void writeDumpMeta(StepContext ctx, Map<String, String> startLsnByDb, String startTime,
                        Map<String, Integer> dbTableCounts, Map<String, Long> dbRowCounts) {
         try {
-            java.nio.file.Files.createDirectories(outputRoot);
-            Path metaFile = outputRoot.resolve("dump-meta.json");
-            StringBuilder dbEntries = new StringBuilder();
-            boolean first = true;
+            TaskManager tm = ctx.get("taskManager", TaskManager.class);
+            String taskName = ctx.get("taskName", String.class);
+            if (tm == null || taskName == null) return;
+
+            List<TaskManager.DumpResult> rows = new ArrayList<>();
             for (String db : dbTableCounts.keySet()) {
-                if (!first) dbEntries.append(",\n");
-                first = false;
-                dbEntries.append("    ").append(jsonEscape(db)).append(": {\n");
-                dbEntries.append("      \"tables\": ").append(dbTableCounts.getOrDefault(db, 0)).append(",\n");
-                dbEntries.append("      \"rows\": ").append(dbRowCounts.getOrDefault(db, 0L)).append("\n");
-                dbEntries.append("    }");
+                rows.add(new TaskManager.DumpResult(
+                        db,
+                        dbTableCounts.getOrDefault(db, 0),
+                        dbRowCounts.getOrDefault(db, 0L),
+                        startLsnByDb.get(db)));
             }
-            StringBuilder lsnEntries = new StringBuilder();
-            boolean firstLsn = true;
-            for (Map.Entry<String, String> e : startLsnByDb.entrySet()) {
-                if (!firstLsn) lsnEntries.append(",\n");
-                firstLsn = false;
-                lsnEntries.append("    ").append(jsonEscape(e.getKey()))
-                        .append(": ").append(jsonEscape(e.getValue()));
-            }
-            String json = "{\n" +
-                "  \"startTime\": " + jsonEscape(startTime) + ",\n" +
-                "  \"startLsnByDb\": {\n" + lsnEntries + "\n  },\n" +
-                "  \"databases\": {\n" + dbEntries + "\n  }\n" +
-                "}\n";
-            java.nio.file.Files.writeString(metaFile, json, java.nio.charset.StandardCharsets.UTF_8);
+            tm.writeDumpResults(taskName, rows);
+            Log.info(log, "dump results written to database", "databases", rows.size());
         } catch (Exception e) {
-            Log.warn(log, "Failed to write dump-meta.json", "error", e.getMessage());
+            Log.warn(log, "Failed to write dump results", "error", e.getMessage());
         }
     }
 
@@ -469,28 +458,4 @@ public class DumpStep implements MigrationStep {
         return Path.of(base);
     }
 
-    static String jsonEscape(String s) {
-        if (s == null) return "\"null\"";
-        StringBuilder sb = new StringBuilder(s.length() + 8);
-        sb.append('"');
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"'  -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default  -> {
-                    if (c < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        sb.append(c);
-                    }
-                }
-            }
-        }
-        sb.append('"');
-        return sb.toString();
-    }
 }

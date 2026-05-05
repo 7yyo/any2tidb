@@ -71,6 +71,26 @@ class DbManager {
                         finished_at TEXT
                     )
                     """);
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS snapshot_result (
+                        task    TEXT NOT NULL REFERENCES task(task),
+                        db_name TEXT NOT NULL,
+                        tables  INTEGER NOT NULL DEFAULT 0,
+                        rows    INTEGER NOT NULL DEFAULT 0,
+                        error   TEXT,
+                        PRIMARY KEY (task, db_name)
+                    )
+                    """);
+            st.execute("""
+                    CREATE TABLE IF NOT EXISTS dump_result (
+                        task      TEXT NOT NULL REFERENCES task(task),
+                        db_name   TEXT NOT NULL,
+                        tables    INTEGER NOT NULL DEFAULT 0,
+                        rows      INTEGER NOT NULL DEFAULT 0,
+                        start_lsn TEXT,
+                        PRIMARY KEY (task, db_name)
+                    )
+                    """);
         }
     }
 
@@ -139,6 +159,70 @@ class DbManager {
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM task")) {
             return rs.getInt(1) == 0;
+        }
+    }
+
+    // ── Snapshot / Dump results ────────────────────────────────────────────
+
+    record SnapshotRow(String dbName, int tables, long rows, String error) {}
+    record DumpRow(String dbName, int tables, long rows, String startLsn) {}
+
+    synchronized void insertSnapshotResults(String task, List<SnapshotRow> results) throws SQLException {
+        ensureInitialized();
+        String sql = "INSERT OR REPLACE INTO snapshot_result(task, db_name, tables, rows, error) VALUES (?,?,?,?,?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (SnapshotRow r : results) {
+                ps.setString(1, task);
+                ps.setString(2, r.dbName);
+                ps.setInt(3, r.tables);
+                ps.setLong(4, r.rows);
+                ps.setString(5, r.error);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    List<SnapshotRow> findSnapshotResults(String task) throws SQLException {
+        ensureInitialized();
+        List<SnapshotRow> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT db_name, tables, rows, error FROM snapshot_result WHERE task=? ORDER BY db_name")) {
+            ps.setString(1, task);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(new SnapshotRow(
+                        rs.getString("db_name"), rs.getInt("tables"),
+                        rs.getLong("rows"), rs.getString("error")));
+            }
+        }
+        return list;
+    }
+
+    synchronized void insertDumpResults(String task, List<DumpRow> results) throws SQLException {
+        ensureInitialized();
+        String sql = "INSERT OR REPLACE INTO dump_result(task, db_name, tables, rows, start_lsn) VALUES (?,?,?,?,?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (DumpRow r : results) {
+                ps.setString(1, task);
+                ps.setString(2, r.dbName);
+                ps.setInt(3, r.tables);
+                ps.setLong(4, r.rows);
+                ps.setString(5, r.startLsn);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+        }
+    }
+
+    synchronized void deleteResults(String task) throws SQLException {
+        ensureInitialized();
+        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM snapshot_result WHERE task=?")) {
+            ps.setString(1, task);
+            ps.executeUpdate();
+        }
+        try (PreparedStatement ps = conn.prepareStatement("DELETE FROM dump_result WHERE task=?")) {
+            ps.setString(1, task);
+            ps.executeUpdate();
         }
     }
 

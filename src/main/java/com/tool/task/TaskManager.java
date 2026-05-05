@@ -98,6 +98,7 @@ public class TaskManager {
             }
         }
 
+        dbManager.deleteResults(taskName);
         dbManager.deleteByTask(taskName);
         try (var stream = Files.walk(taskDir)) {
             stream.sorted(Comparator.reverseOrder())
@@ -142,6 +143,31 @@ public class TaskManager {
         return dbManager.findAll().stream()
                 .map(TaskMeta::getTask)
                 .collect(Collectors.toList());
+    }
+
+    // ── Snapshot / Dump results ───────────────────────────────────────────
+
+    public record SnapshotResult(String dbName, int tables, long rows, String error) {}
+    public record DumpResult(String dbName, int tables, long rows, String startLsn) {}
+
+    public void writeSnapshotResults(String taskName, List<SnapshotResult> results) throws Exception {
+        List<DbManager.SnapshotRow> rows = results.stream()
+                .map(r -> new DbManager.SnapshotRow(r.dbName, r.tables, r.rows, r.error))
+                .toList();
+        dbManager.insertSnapshotResults(taskName, rows);
+    }
+
+    public List<SnapshotResult> readSnapshotResults(String taskName) throws Exception {
+        return dbManager.findSnapshotResults(taskName).stream()
+                .map(r -> new SnapshotResult(r.dbName(), r.tables(), r.rows(), r.error()))
+                .toList();
+    }
+
+    public void writeDumpResults(String taskName, List<DumpResult> results) throws Exception {
+        List<DbManager.DumpRow> rows = results.stream()
+                .map(r -> new DbManager.DumpRow(r.dbName, r.tables, r.rows, r.startLsn))
+                .toList();
+        dbManager.insertDumpResults(taskName, rows);
     }
 
     public Path getTaskDir(String taskName) {
