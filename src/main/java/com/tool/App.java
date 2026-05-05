@@ -506,9 +506,9 @@ public class App implements ApplicationRunner {
 
             System.out.println();
 
-            String fmt = "%-24s %-10s %-10s %-22s %-22s%n";
-            String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET"};
-            int[] w     = {24, 10, 10, 22, 22};
+            String fmt = "%-20s %-8s %-8s %-20s %-20s %-11s%n";
+            String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED"};
+            int[] w     = {20, 8, 8, 20, 20, 11};
             System.out.printf(fmt, (Object[]) cols);
             for (int i = 0; i < w.length; i++) {
                 System.out.print("-".repeat(w[i]));
@@ -521,16 +521,17 @@ public class App implements ApplicationRunner {
                 if (m != null) {
                     String sourceStr = peerStr(m.getSource());
                     String targetStr = peerStr(m.getTarget());
+                    String created = shortTime(m.getCreatedAt());
                     System.out.printf(fmt,
                             entry.name,
                             m.getMode() != null ? m.getMode() : "?",
                             m.getStatus() != null ? m.getStatus() : "?",
-                            sourceStr, targetStr);
+                            sourceStr, targetStr, created);
                     if ("FAILED".equals(m.getStatus()) && m.getError() != null) {
                         System.out.println("  \u2514 " + m.getError());
                     }
                 } else {
-                    System.out.printf(fmt, entry.name, "?", "error", "", "");
+                    System.out.printf(fmt, entry.name, "?", "error", "", "", "");
                 }
             }
             System.out.println();
@@ -539,6 +540,11 @@ public class App implements ApplicationRunner {
             System.out.println("Error listing tasks: " + e.getMessage());
             System.out.println();
         }
+    }
+
+    private static String shortTime(String createdAt) {
+        if (createdAt == null || createdAt.length() < 16) return "?";
+        return createdAt.substring(5, 16); // "2026-05-05 12:41:33 +0800" → "05-05 12:41"
     }
 
     private static String peerStr(TaskMeta.SourceInfo s) {
