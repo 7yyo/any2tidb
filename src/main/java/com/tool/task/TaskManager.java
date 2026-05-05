@@ -177,6 +177,9 @@ public class TaskManager {
         System.out.println("Task:      " + m.getTask());
         System.out.println("Mode:      " + (m.getMode() != null ? m.getMode() : "?"));
         System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?"));
+        if (m.getFromTask() != null) {
+            System.out.println("Parent:    " + m.getFromTask());
+        }
         System.out.println("Created:   " + m.getCreatedAt());
         if (m.getFinishedAt() != null) {
             System.out.println("Finished:  " + m.getFinishedAt());

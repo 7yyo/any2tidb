@@ -14,6 +14,7 @@ public class TaskMeta {
     private String createdAt;
     private String startedAt;
     private String finishedAt;
+    private String fromTask;
     private Integer tables;
     private String error;
 
@@ -63,6 +64,8 @@ public class TaskMeta {
     public void setStartedAt(String startedAt) { this.startedAt = startedAt; }
     public String getFinishedAt() { return finishedAt; }
     public void setFinishedAt(String finishedAt) { this.finishedAt = finishedAt; }
+    public String getFromTask() { return fromTask; }
+    public void setFromTask(String fromTask) { this.fromTask = fromTask; }
     public Integer getTables() { return tables; }
     public void setTables(Integer tables) { this.tables = tables; }
     public String getError() { return error; }

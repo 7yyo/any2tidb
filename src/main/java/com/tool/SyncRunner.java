@@ -79,10 +79,35 @@ class SyncRunner {
         tgt.setPort(config.getTarget().getPort());
         tgt.setDatabase("");
         meta.setTarget(tgt);
+
+        // ── from-task: inherit offset / schema-history from a prior snapshot or dump ──
+        String fromTask = args.containsOption("from-task")
+                ? args.getOptionValues("from-task").get(0) : null;
+        if (fromTask != null && !fromTask.isBlank()) {
+            Path fromDir = taskManager.getTaskDir(fromTask);
+            if (!java.nio.file.Files.exists(fromDir)) {
+                throw new IllegalArgumentException("--from-task '" + fromTask + "' not found");
+            }
+            TaskMeta parent = taskManager.status(fromTask);
+            String parentMode = parent.getMode();
+            if (!"snapshot".equals(parentMode) && !"dump".equals(parentMode)) {
+                throw new IllegalArgumentException("--from-task '" + fromTask
+                        + "' is mode=" + parentMode + ", expected snapshot or dump");
+            }
+            if (!"SUCCESS".equals(parent.getStatus())) {
+                Log.warn(log, "--from-task '" + fromTask + "' status is " + parent.getStatus()
+                        + ", offsets may be incomplete");
+            }
+            meta.setFromTask(fromTask);
+            // Use parent's offsets/ and history/ instead of creating fresh ones
+            ctx.put("offsetStoragePath", fromDir.resolve("offsets").toString());
+            ctx.put("schemaHistoryPath", fromDir.resolve("history").toString());
+        } else {
+            App.resolveTaskPaths(taskName, taskManager, ctx);
+        }
+
         taskManager.writeMeta(taskName, meta);
 
-        App.resolveTaskPaths(taskName, taskManager, ctx);
-        // Override syncConfig paths from task dir
         String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
         String taskHistoryPath = ctx.get("schemaHistoryPath", String.class);
         if (taskOffsetPath != null) {

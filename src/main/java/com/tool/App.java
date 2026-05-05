@@ -228,6 +228,7 @@ public class App implements ApplicationRunner {
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
         }
         if ("sync".equals(mode)) {
+            System.out.println("  --from-task=NAME          Read offsets/history from a prior snapshot or dump task");
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
@@ -279,7 +280,7 @@ public class App implements ApplicationRunner {
     );
     private static final Set<String> SYNC_FLAGS = Set.of(
             "offset-storage-path", "schema-history-path",
-            "poll-interval-ms", "meta-file"
+            "poll-interval-ms", "meta-file", "from-task"
     );
     private static final Set<String> LOADGEN_FLAGS = Set.of(
             "database", "rate", "duration"
@@ -531,6 +532,9 @@ public class App implements ApplicationRunner {
             System.out.println("Task:      " + m.getTask());
             System.out.println("Mode:      " + (m.getMode() != null ? m.getMode() : "?"));
             System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?"));
+            if (m.getFromTask() != null) {
+                System.out.println("Parent:    " + m.getFromTask());
+            }
             System.out.println("Created:   " + m.getCreatedAt());
             if (m.getStartedAt() != null && !m.getStartedAt().equals(m.getCreatedAt())) {
                 System.out.println("Started:   " + m.getStartedAt());
