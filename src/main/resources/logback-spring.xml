@@ -3,7 +3,7 @@
         <file>any2tidb.log</file>
         <append>true</append>
         <encoder>
-            <pattern>[%d{yyyy/MM/dd HH:mm:ss.SSS Z}] [%level] %msg [%X{task}]%n</pattern>
+            <pattern>[%d{yyyy/MM/dd HH:mm:ss.SSS Z}] [%level] %msg [task=%X{task}]%n</pattern>
         </encoder>
     </appender>
     <root level="OFF" />

@@ -177,11 +177,35 @@ public class TiDBBatchWriter {
         }
         long tAfterDrain = System.currentTimeMillis();
 
-        // Wait for all flushes to complete
+        // Wait for all flushes to complete, logging progress every 30s
         int totalFutures = flushFutures.size();
-        long incompleteCount = flushFutures.stream().filter(f -> !f.isDone()).count();
-        for (Future<?> f : flushFutures) {
-            try { f.get(); } catch (Exception ignored) {}
+        long waitStartMs = System.currentTimeMillis();
+        long lastLogMs = waitStartMs;
+        int remaining = totalFutures;
+        int cursor = 0;
+        while (cursor < flushFutures.size()) {
+            Future<?> f = flushFutures.get(cursor);
+            if (f.isDone()) {
+                cursor++;
+                continue;
+            }
+            try {
+                f.get(30, TimeUnit.SECONDS);
+            } catch (Exception ignored) {}
+            // Re-count remaining and log progress
+            int nowRemaining = 0;
+            for (int i = cursor; i < flushFutures.size(); i++) {
+                if (!flushFutures.get(i).isDone()) nowRemaining++;
+            }
+            long elapsed = System.currentTimeMillis() - waitStartMs;
+            if (nowRemaining > 0 && (nowRemaining != remaining || System.currentTimeMillis() - lastLogMs >= 30_000)) {
+                Log.info(log, "flush progress",
+                        "batches", nowRemaining,
+                        "rows", "~" + (nowRemaining * batchSize),
+                        "elapsed", formatDuration(elapsed));
+                lastLogMs = System.currentTimeMillis();
+            }
+            remaining = nowRemaining;
         }
         long tAfterWait = System.currentTimeMillis();
         flushFutures.clear();
@@ -191,7 +215,6 @@ public class TiDBBatchWriter {
         if (totalFutures > 0) {
             Log.info(log, "flushAll breakdown", "pendingBatches", pendingBatches,
                     "totalFutures", totalFutures,
-                    "incomplete", incompleteCount,
                     "drainMs", tAfterDrain - tDrain,
                     "waitMs", tAfterWait - tAfterDrain,
                     "termMs", tAfterTerm - tAfterWait);
