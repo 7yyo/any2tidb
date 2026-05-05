@@ -473,22 +473,16 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
 
-            // Column widths
-            String fmt = "| %-24s | %-10s | %-10s | %-25s | %-25s |%n";
-            String sep = "+" + "-".repeat(26) + "+" + "-".repeat(12) + "+"
-                    + "-".repeat(12) + "+" + "-".repeat(27) + "+" + "-".repeat(27) + "+";
-
-            System.out.println(sep);
+            String fmt = "%-24s %-10s %-10s %-22s %s%n";
             System.out.printf(fmt, "TASK", "MODE", "STATUS", "SOURCE", "TARGET");
-            System.out.println(sep);
+            System.out.println("-".repeat(76));
+
             TaskManager tm = new TaskManager(tasksRoot);
             for (String name : taskDirs) {
                 try {
                     TaskMeta m = tm.status(name);
-                    TaskMeta.SourceInfo src = m.getSource();
-                    TaskMeta.TargetInfo tgt = m.getTarget();
-                    String sourceStr = peerStr(src);
-                    String targetStr = peerStr(tgt);
+                    String sourceStr = peerStr(m.getSource());
+                    String targetStr = peerStr(m.getTarget());
                     System.out.printf(fmt,
                             name,
                             m.getMode() != null ? m.getMode() : "?",
@@ -498,7 +492,6 @@ public class App implements ApplicationRunner {
                     System.out.printf(fmt, name, "?", "error", "", "");
                 }
             }
-            System.out.println(sep);
             System.out.println();
         } catch (Exception e) {
             System.out.println();
@@ -509,20 +502,18 @@ public class App implements ApplicationRunner {
 
     private static String peerStr(TaskMeta.SourceInfo s) {
         if (s == null) return "?";
-        String host = s.getHost() != null && !s.getHost().isEmpty() ? s.getHost() : "";
+        String host = s.getHost();
         int port = s.getPort();
-        if (host.isEmpty() && port == 0) return "?";
-        String db = s.getDatabase() != null && !s.getDatabase().isEmpty() ? "/" + s.getDatabase() : "";
-        return host + ":" + port + db;
+        if (host == null || host.isEmpty()) return "?";
+        return host + ":" + port;
     }
 
     private static String peerStr(TaskMeta.TargetInfo t) {
         if (t == null) return "?";
-        String host = t.getHost() != null && !t.getHost().isEmpty() ? t.getHost() : "";
+        String host = t.getHost();
         int port = t.getPort();
-        if (host.isEmpty() && port == 0) return "?";
-        String db = t.getDatabase() != null && !t.getDatabase().isEmpty() ? "/" + t.getDatabase() : "";
-        return host + ":" + port + db;
+        if (host == null || host.isEmpty()) return "?";
+        return host + ":" + port;
     }
 
     private static void taskShow(String name) {
