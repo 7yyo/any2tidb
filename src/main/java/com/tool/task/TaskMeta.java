@@ -26,7 +26,7 @@ public class TaskMeta {
         TaskMeta m = new TaskMeta();
         m.task = taskName;
         m.mode = mode;
-        m.status = "running";
+        m.status = "RUNNING";
         m.createdAt = OffsetDateTime.now().format(FMT).toString();
         m.startedAt = m.createdAt;
         SourceInfo src = new SourceInfo();
@@ -36,12 +36,12 @@ public class TaskMeta {
     }
 
     public void markSuccess() {
-        this.status = "success";
+        this.status = "SUCCESS";
         this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }
 
     public void markFailed(String err) {
-        this.status = "failed";
+        this.status = "FAILED";
         this.error = err;
         this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }

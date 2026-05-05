@@ -18,7 +18,7 @@ class TaskManagerTest {
 
         assertEquals("test-task", meta.getTask());
         assertEquals("dump", meta.getMode());
-        assertEquals("running", meta.getStatus());
+        assertEquals("RUNNING", meta.getStatus());
         assertNotNull(meta.getCreatedAt());
         assertNotNull(meta.getStartedAt());
         assertTrue(tempDir.resolve("tasks/test-task/.lock").toFile().exists());
@@ -57,11 +57,11 @@ class TaskManagerTest {
     @Test
     void markSuccessUpdatesStatusAndTime() {
         TaskMeta meta = TaskMeta.create("t", "snapshot", "sqlserver");
-        assertEquals("running", meta.getStatus());
+        assertEquals("RUNNING", meta.getStatus());
         assertNull(meta.getFinishedAt());
 
         meta.markSuccess();
-        assertEquals("success", meta.getStatus());
+        assertEquals("SUCCESS", meta.getStatus());
         assertNotNull(meta.getFinishedAt());
     }
 
@@ -70,7 +70,7 @@ class TaskManagerTest {
         TaskMeta meta = TaskMeta.create("t", "sync", "sqlserver");
 
         meta.markFailed("LSN not available");
-        assertEquals("failed", meta.getStatus());
+        assertEquals("FAILED", meta.getStatus());
         assertEquals("LSN not available", meta.getError());
         assertNotNull(meta.getFinishedAt());
     }
