@@ -91,7 +91,6 @@ class SchemaRunner {
         steps.add(new VerifyStep(config, verifier, driver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
-        App.handleResult(result, ctx);
 
         try {
             if (!result.isFatal()) {
@@ -103,5 +102,7 @@ class SchemaRunner {
         } finally {
             taskManager.unlock();
         }
+
+        App.handleResult(result, ctx);
     }
 }

@@ -127,7 +127,6 @@ class SyncRunner {
         steps.add(new SyncStep(config, targetDs, sourceDriver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
-        App.handleResult(result, ctx);
 
         try {
             if (result.isFatal()) {
@@ -139,5 +138,7 @@ class SyncRunner {
         } finally {
             taskManager.unlock();
         }
+
+        App.handleResult(result, ctx);
     }
 }

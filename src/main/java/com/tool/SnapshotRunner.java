@@ -103,7 +103,6 @@ class SnapshotRunner {
         steps.add(new SnapshotStep(config, targetDs, sourceDriver));
 
         StepResult result = new MigrationPipeline(steps).run(ctx);
-        App.handleResult(result, ctx);
 
         try {
             if (!result.isFatal()) {
@@ -115,5 +114,7 @@ class SnapshotRunner {
         } finally {
             taskManager.unlock();
         }
+
+        App.handleResult(result, ctx);
     }
 }
