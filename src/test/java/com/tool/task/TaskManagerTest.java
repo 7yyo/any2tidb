@@ -3,6 +3,7 @@ package com.tool.task;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 class TaskManagerTest {
@@ -13,10 +14,13 @@ class TaskManagerTest {
     @Test
     void createShouldBuildDirectoryAndLockAndMeta() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        TaskMeta meta = tm.create("test-task", "sqlserver");
+        TaskMeta meta = tm.create("test-task", "dump", "sqlserver");
 
         assertEquals("test-task", meta.getTask());
-        assertEquals(TaskState.CREATED, meta.getState());
+        assertEquals("dump", meta.getMode());
+        assertEquals("running", meta.getStatus());
+        assertNotNull(meta.getCreatedAt());
+        assertNotNull(meta.getStartedAt());
         assertTrue(tempDir.resolve("tasks/test-task/.lock").toFile().exists());
         assertTrue(tempDir.resolve("tasks/test-task/meta.json").toFile().exists());
         assertTrue(tempDir.resolve("tasks/test-task/offsets").toFile().exists());
@@ -26,64 +30,83 @@ class TaskManagerTest {
     }
 
     @Test
-    void lockPreventsDoubleStart() throws Exception {
-        TaskManager tm1 = new TaskManager(tempDir.resolve("tasks"));
-        tm1.create("lock-test", "sqlserver");
+    void createRejectsDuplicateTaskName() throws Exception {
+        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
+        tm.create("dup-task", "dump", "sqlserver");
+        tm.unlock();
 
         TaskManager tm2 = new TaskManager(tempDir.resolve("tasks"));
-        assertThrows(TaskLockedException.class, () -> tm2.create("lock-test", "sqlserver"));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> tm2.create("dup-task", "snapshot", "sqlserver"));
+        assertTrue(ex.getMessage().contains("already exists"));
+    }
+
+    @Test
+    void lockPreventsDoubleStart() throws Exception {
+        TaskManager tm1 = new TaskManager(tempDir.resolve("tasks"));
+        tm1.create("lock-test", "dump", "sqlserver");
+
+        TaskManager tm2 = new TaskManager(tempDir.resolve("tasks"));
+        assertThrows(TaskLockedException.class, () -> tm2.create("lock-test", "dump", "sqlserver"));
 
         tm1.unlock();
     }
 
     @Test
-    void resumeReadsExistingMeta() throws Exception {
+    void markSuccessUpdatesStatusAndTime() {
+        TaskMeta meta = TaskMeta.create("t", "snapshot", "sqlserver");
+        assertEquals("running", meta.getStatus());
+        assertNull(meta.getFinishedAt());
+
+        meta.markSuccess();
+        assertEquals("success", meta.getStatus());
+        assertNotNull(meta.getFinishedAt());
+    }
+
+    @Test
+    void markFailedSetsStatusAndError() {
+        TaskMeta meta = TaskMeta.create("t", "sync", "sqlserver");
+
+        meta.markFailed("LSN not available");
+        assertEquals("failed", meta.getStatus());
+        assertEquals("LSN not available", meta.getError());
+        assertNotNull(meta.getFinishedAt());
+    }
+
+    @Test
+    void deleteRemovesTaskDirectory() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        tm.create("resume-test", "sqlserver");
+        tm.create("del-test", "dump", "sqlserver");
         tm.unlock();
+
+        assertTrue(Files.exists(tempDir.resolve("tasks/del-test")));
+
+        tm.delete("del-test");
+        assertFalse(Files.exists(tempDir.resolve("tasks/del-test")));
+    }
+
+    @Test
+    void deleteThrowsForRunningTask() throws Exception {
+        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
+        tm.create("running", "dump", "sqlserver");
 
         TaskManager tm2 = new TaskManager(tempDir.resolve("tasks"));
-        TaskMeta meta = tm2.resume("resume-test");
-        assertEquals(TaskState.CREATED, meta.getState());
-        tm2.unlock();
-    }
-
-    @Test
-    void transitionStateUpdatesMeta() throws Exception {
-        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        tm.create("state-test", "sqlserver");
-
-        tm.transition("state-test", TaskState.DUMPING);
-        TaskMeta meta = tm.readMeta("state-test");
-        assertEquals(TaskState.DUMPING, meta.getState());
-        assertEquals(PhaseState.RUNNING, meta.getPhases().get("dump").getState());
-        assertNotNull(meta.getPhases().get("dump").getStartedAt());
-
-        tm.transition("state-test", TaskState.DUMPED);
-        meta = tm.readMeta("state-test");
-        assertEquals(TaskState.DUMPED, meta.getState());
-        assertEquals(PhaseState.DONE, meta.getPhases().get("dump").getState());
-        assertNotNull(meta.getPhases().get("dump").getFinishedAt());
+        assertThrows(TaskLockedException.class, () -> tm2.delete("running"));
 
         tm.unlock();
     }
 
     @Test
-    void transitionThrowsOnInvalidState() throws Exception {
+    void deleteThrowsForNonExistentTask() {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        tm.create("invalid-trans", "sqlserver");
-
-        assertThrows(IllegalStateException.class,
-                () -> tm.transition("invalid-trans", TaskState.SYNCING));
-
-        tm.unlock();
+        assertThrows(IllegalArgumentException.class, () -> tm.delete("no-such-task"));
     }
 
     @Test
     void listTasksReturnsAllTaskNames() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        tm.create("task-a", "sqlserver"); tm.unlock();
-        tm.create("task-b", "sqlserver"); tm.unlock();
+        tm.create("task-a", "dump", "sqlserver"); tm.unlock();
+        tm.create("task-b", "snapshot", "sqlserver"); tm.unlock();
 
         var tasks = tm.list();
         assertTrue(tasks.contains("task-a"));
@@ -91,25 +114,15 @@ class TaskManagerTest {
     }
 
     @Test
-    void failRecordsErrorAndMarksRunningPhaseFailed() throws Exception {
+    void statusReadsMeta() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        tm.create("fail-test", "sqlserver");
-        tm.transition("fail-test", TaskState.DUMPING);
-        tm.fail("fail-test", "LSN not available");
-
-        TaskMeta meta = tm.readMeta("fail-test");
-        assertEquals(TaskState.FAILED, meta.getState());
-        assertTrue(meta.getErrors().contains("LSN not available"));
-        assertEquals(PhaseState.FAILED, meta.getPhases().get("dump").getState());
-        assertEquals("LSN not available", meta.getPhases().get("dump").getError());
-
+        tm.create("status-test", "schema", "sqlserver");
         tm.unlock();
-    }
 
-    @Test
-    void resumeThrowsForNonExistentTask() {
-        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
-        assertThrows(IllegalArgumentException.class, () -> tm.resume("no-such-task"));
+        TaskMeta m = tm.status("status-test");
+        assertEquals("status-test", m.getTask());
+        assertEquals("schema", m.getMode());
+        assertEquals("running", m.getStatus());
     }
 
     @Test
