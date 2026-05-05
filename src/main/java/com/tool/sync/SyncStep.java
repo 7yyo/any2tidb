@@ -13,6 +13,7 @@ import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
 import com.tool.source.SourceDriver;
 import com.tool.task.TaskManager;
+import com.tool.task.TaskMeta;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 
@@ -125,73 +126,130 @@ public class SyncStep implements MigrationStep {
         SyncEngineFactory engineFactory = new SyncEngineFactory(
                 config.getSource(), sourceDriver.debeziumConnectorClass());
 
-        // 5. Launch one engine per database concurrently
+        // 5. Sync loop — supports pause/resume/stop without process restart
         int dbCount = okDbs.size();
-        ExecutorService executor = Executors.newFixedThreadPool(dbCount);
-        ConcurrentHashMap<String, DebeziumEngine<ChangeEvent<String, String>>> engines = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Throwable> engineErrors = new ConcurrentHashMap<>();
-        CountDownLatch allDone = new CountDownLatch(dbCount);
-        AtomicBoolean shuttingDown = new AtomicBoolean(false);
-
-        for (SnapshotDbResult db : okDbs) {
-            executor.submit(() -> {
-                try {
-                    SyncSink sink = new SyncSink(writer, targetDs, "any2tidb_" + db.dbName());
-
-                    DebeziumEngine<ChangeEvent<String, String>> engine = engineFactory.create(
-                            db.dbName(), cfg, sink, error -> {
-                                if (error != null) {
-                                    engineErrors.put(db.dbName(), error);
-                                    Log.error(log, "sync engine error",
-                                            "database", db.dbName(), "error", error.getMessage());
-                                }
-                                allDone.countDown();
-                            });
-                    engines.put(db.dbName(), engine);
-
-                    engine.run();
-                } catch (Exception e) {
-                    engineErrors.put(db.dbName(), e);
-                    Log.error(log, "sync engine error", "database", db.dbName(), "error", e.getMessage());
-                    allDone.countDown();
-                }
-            });
-        }
-
-        // 6. Shutdown hook — graceful stop on SIGTERM
-        Thread shutdownHook = new Thread(() -> {
-            if (!shuttingDown.compareAndSet(false, true)) return;
-            for (var entry : engines.entrySet()) {
-                try { entry.getValue().close(); }
-                catch (Throwable ignored) {}
-            }
-        }, "sync-shutdown");
-        Runtime.getRuntime().addShutdownHook(shutdownHook);
-
-        // 7. Wait until all engines complete or stop is requested
         TaskManager taskManager = ctx.get("taskManager", TaskManager.class);
         String taskName = ctx.get("taskName", String.class);
+        ConcurrentHashMap<String, Throwable> engineErrors = new ConcurrentHashMap<>();
+        AtomicBoolean shuttingDown = new AtomicBoolean(false);
         boolean stoppedByUser = false;
-        while (!allDone.await(2, TimeUnit.SECONDS)) {
-            if (taskManager != null && taskName != null
-                    && taskManager.isStopRequested(taskName)) {
-                Log.info(log, "stop requested via task stop, shutting down engines gracefully");
-                stoppedByUser = true;
-                ctx.put("stopped", true);
+
+        outer:
+        while (true) {
+            ExecutorService executor = Executors.newFixedThreadPool(dbCount);
+            ConcurrentHashMap<String, DebeziumEngine<ChangeEvent<String, String>>> engines = new ConcurrentHashMap<>();
+            CountDownLatch allDone = new CountDownLatch(dbCount);
+
+            for (SnapshotDbResult db : okDbs) {
+                executor.submit(() -> {
+                    try {
+                        SyncSink sink = new SyncSink(writer, targetDs, "any2tidb_" + db.dbName());
+
+                        DebeziumEngine<ChangeEvent<String, String>> engine = engineFactory.create(
+                                db.dbName(), cfg, sink, error -> {
+                                    if (error != null) {
+                                        engineErrors.put(db.dbName(), error);
+                                        Log.error(log, "sync engine error",
+                                                "database", db.dbName(), "error", error.getMessage());
+                                    }
+                                    allDone.countDown();
+                                });
+                        engines.put(db.dbName(), engine);
+
+                        engine.run();
+                    } catch (Exception e) {
+                        engineErrors.put(db.dbName(), e);
+                        Log.error(log, "sync engine error", "database", db.dbName(), "error", e.getMessage());
+                        allDone.countDown();
+                    }
+                });
+            }
+
+            // 6. Shutdown hook — graceful stop on SIGTERM
+            Thread shutdownHook = new Thread(() -> {
+                if (!shuttingDown.compareAndSet(false, true)) return;
                 for (var entry : engines.entrySet()) {
                     try { entry.getValue().close(); }
                     catch (Throwable ignored) {}
                 }
-                break;
-            }
-        }
+            }, "sync-shutdown");
+            Runtime.getRuntime().addShutdownHook(shutdownHook);
 
-        // 8. Cleanup
-        if (!shuttingDown.get()) {
-            try { Runtime.getRuntime().removeShutdownHook(shutdownHook); } catch (Exception ignored) {}
+            // 7. Wait until all engines complete, stop, or pause is requested
+            boolean paused = false;
+            while (!allDone.await(2, TimeUnit.SECONDS)) {
+                if (taskManager != null && taskName != null
+                        && taskManager.isStopRequested(taskName)) {
+                    Log.info(log, "stop requested, shutting down engines gracefully");
+                    stoppedByUser = true;
+                    ctx.put("stopped", true);
+                    for (var entry : engines.entrySet()) {
+                        try { entry.getValue().close(); }
+                        catch (Throwable ignored) {}
+                    }
+                    break;
+                }
+                if (taskManager != null && taskName != null
+                        && taskManager.isPauseRequested(taskName)) {
+                    Log.info(log, "pause requested, pausing engines");
+                    paused = true;
+                    for (var entry : engines.entrySet()) {
+                        try { entry.getValue().close(); }
+                        catch (Throwable ignored) {}
+                    }
+                    break;
+                }
+            }
+
+            // 8. Cleanup this iteration's resources
+            if (!shuttingDown.get()) {
+                try { Runtime.getRuntime().removeShutdownHook(shutdownHook); } catch (Exception ignored) {}
+            }
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+
+            if (!engineErrors.isEmpty()) {
+                StringBuilder msg = new StringBuilder("Sync engine(s) failed: ");
+                engineErrors.forEach((db, err) ->
+                        msg.append(db).append("=").append(err.getMessage()).append("; "));
+                return StepResult.fatal(msg.toString());
+            }
+
+            if (stoppedByUser) {
+                break outer;
+            }
+
+            if (paused) {
+                // Persist PAUSED status
+                try {
+                    TaskMeta meta = taskManager.readMeta(taskName);
+                    meta.markPaused();
+                    taskManager.writeMeta(taskName, meta);
+                } catch (Exception e) {
+                    Log.warn(log, "failed to write PAUSED status", "error", e.getMessage());
+                }
+
+                Log.info(log, "sync paused, waiting for resume");
+                // Wait until .pause file is removed
+                while (taskManager.isPauseRequested(taskName)) {
+                    try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                }
+
+                // Persist RUNNING status on resume
+                try {
+                    TaskMeta meta = taskManager.readMeta(taskName);
+                    meta.markResumed();
+                    taskManager.writeMeta(taskName, meta);
+                } catch (Exception e) {
+                    Log.warn(log, "failed to write RUNNING status on resume", "error", e.getMessage());
+                }
+
+                Log.info(log, "resuming sync");
+                continue outer;
+            }
+
+            break outer; // natural completion
         }
-        executor.shutdownNow();
-        executor.awaitTermination(5, TimeUnit.SECONDS);
 
         if (!engineErrors.isEmpty()) {
             StringBuilder msg = new StringBuilder("Sync engine(s) failed: ");

@@ -172,6 +172,30 @@ public class TaskManager {
         return Files.exists(tasksRoot.resolve(taskName).resolve(".stop"));
     }
 
+    /** Writes a .pause marker to signal a running sync task to pause. */
+    public void pause(String taskName) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
+        if (!Files.exists(taskDir)) {
+            throw new IllegalArgumentException("Task not found: " + taskName);
+        }
+        Files.writeString(taskDir.resolve(".pause"),
+                java.time.OffsetDateTime.now().toString());
+    }
+
+    /** Removes the .pause marker so the sync task resumes. */
+    public void resume(String taskName) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
+        if (!Files.exists(taskDir)) {
+            throw new IllegalArgumentException("Task not found: " + taskName);
+        }
+        Files.deleteIfExists(taskDir.resolve(".pause"));
+    }
+
+    /** Checks whether the .pause marker exists for this task. */
+    public boolean isPauseRequested(String taskName) {
+        return Files.exists(tasksRoot.resolve(taskName).resolve(".pause"));
+    }
+
     public void unlock() {
         try { if (lock != null && lock.isValid()) lock.release(); } catch (Exception ignored) {}
         try { if (lockChannel != null) lockChannel.close(); } catch (Exception ignored) {}

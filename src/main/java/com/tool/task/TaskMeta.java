@@ -46,6 +46,17 @@ public class TaskMeta {
         this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }
 
+    public void markPaused() {
+        this.status = "PAUSED";
+        this.finishedAt = OffsetDateTime.now().format(FMT).toString();
+    }
+
+    public void markResumed() {
+        this.status = "RUNNING";
+        this.finishedAt = null;
+        this.startedAt = OffsetDateTime.now().format(FMT).toString();
+    }
+
     public void markFailed(String err) {
         this.status = "FAILED";
         this.error = err;

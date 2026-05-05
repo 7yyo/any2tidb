@@ -65,13 +65,15 @@ public class App implements ApplicationRunner {
         // Handle task subcommands before general help (so "task --help" works)
         if (args.length >= 1 && "task".equals(args[0])) {
             if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
-                System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
+                System.out.println("Usage: any2tidb task list|show|delete|stop|pause|resume <name>");
                 System.out.println();
                 System.out.println("Commands:");
                 System.out.println("  list           List all tasks");
                 System.out.println("  show <name>    Show detailed status of a task");
                 System.out.println("  delete <name>  Delete a task (rejected if running)");
                 System.out.println("  stop <name>    Gracefully stop a running sync task");
+                System.out.println("  pause <name>   Pause a running sync task");
+                System.out.println("  resume <name>  Resume a paused sync task");
                 return;
             }
             if (args.length >= 2) {
@@ -84,11 +86,15 @@ public class App implements ApplicationRunner {
                     taskDelete(args[2]);
                 } else if ("stop".equals(sub) && args.length >= 3) {
                     taskStop(args[2]);
+                } else if ("pause".equals(sub) && args.length >= 3) {
+                    taskPause(args[2]);
+                } else if ("resume".equals(sub) && args.length >= 3) {
+                    taskResume(args[2]);
                 } else {
-                    System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
+                    System.out.println("Usage: any2tidb task list|show|delete|stop|pause|resume <name>");
                 }
             } else {
-                System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
+                System.out.println("Usage: any2tidb task list|show|delete|stop|pause|resume <name>");
             }
             return;
         }
@@ -172,7 +178,9 @@ public class App implements ApplicationRunner {
         System.out.println("  any2tidb task list           List all tasks");
         System.out.println("  any2tidb task show <name>    Show detailed status of a task");
         System.out.println("  any2tidb task delete <name>  Delete a task (rejected if running)");
-        System.out.println("  any2tidb task stop <name>    Gracefully stop a running sync task");
+        System.out.println("  any2tidb task stop <name>    Gracefully stop a running/paused sync");
+        System.out.println("  any2tidb task pause <name>   Pause a running sync task");
+        System.out.println("  any2tidb task resume <name>  Resume a paused sync task");
     }
 
     private static void printUsage(String source) {
@@ -597,9 +605,9 @@ public class App implements ApplicationRunner {
         try {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             TaskMeta meta = tm.status(name);
-            if (!"RUNNING".equals(meta.getStatus())) {
+            if (!"RUNNING".equals(meta.getStatus()) && !"PAUSED".equals(meta.getStatus())) {
                 System.out.println();
-                System.out.println("Task '" + name + "' is not running (status: " + meta.getStatus() + ").");
+                System.out.println("Task '" + name + "' cannot be stopped (status: " + meta.getStatus() + ").");
                 System.out.println();
                 return;
             }
@@ -610,19 +618,21 @@ public class App implements ApplicationRunner {
                 return;
             }
             tm.stop(name);
+            // When paused, also remove .pause so the waiting thread can wake up and process the stop
+            try { tm.resume(name); } catch (Exception ignored) {}
             System.out.println();
             System.out.print("Stop requested for task '" + name + "'. Waiting for graceful shutdown");
             System.out.flush();
 
             // Poll until the running process exits or timeout
             long deadline = System.currentTimeMillis() + 30_000;
-            String status = "RUNNING";
+            String status = meta.getStatus();
             while (System.currentTimeMillis() < deadline) {
                 try { Thread.sleep(500); } catch (InterruptedException ignored) {}
                 System.out.print(".");
                 System.out.flush();
                 TaskMeta current = tm.status(name);
-                if (!"RUNNING".equals(current.getStatus())) {
+                if (!"RUNNING".equals(current.getStatus()) && !"PAUSED".equals(current.getStatus())) {
                     status = current.getStatus();
                     break;
                 }
@@ -630,7 +640,7 @@ public class App implements ApplicationRunner {
                 Path lockFile = tm.getTaskDir(name).resolve(".lock");
                 try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
                         lockFile, java.nio.file.StandardOpenOption.WRITE);
-                     java.nio.channels.FileLock ignored = ch.tryLock()) {
+                     java.nio.channels.FileLock ignoredLock = ch.tryLock()) {
                     // Lock acquired → process is gone
                     status = "STOPPED";
                     break;
@@ -640,6 +650,88 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
             System.out.println("Task '" + name + "' " + status + ".");
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("Error: " + e.getMessage());
+            System.out.println();
+        }
+    }
+
+    private static void taskPause(String name) {
+        try {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            TaskMeta meta = tm.status(name);
+            if (!"RUNNING".equals(meta.getStatus())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is not running (status: " + meta.getStatus() + ").");
+                System.out.println();
+                return;
+            }
+            if (!"sync".equals(meta.getMode())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be paused.");
+                System.out.println();
+                return;
+            }
+            tm.pause(name);
+            System.out.println();
+            System.out.print("Pause requested for task '" + name + "'. Waiting");
+            System.out.flush();
+
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                System.out.print(".");
+                System.out.flush();
+                TaskMeta current = tm.status(name);
+                if ("PAUSED".equals(current.getStatus())) {
+                    break;
+                }
+            }
+            System.out.println();
+            System.out.println("Task '" + name + "' paused.");
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("Error: " + e.getMessage());
+            System.out.println();
+        }
+    }
+
+    private static void taskResume(String name) {
+        try {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            TaskMeta meta = tm.status(name);
+            if (!"PAUSED".equals(meta.getStatus())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is not paused (status: " + meta.getStatus() + ").");
+                System.out.println();
+                return;
+            }
+            if (!"sync".equals(meta.getMode())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be resumed.");
+                System.out.println();
+                return;
+            }
+            tm.resume(name);
+            System.out.println();
+            System.out.print("Resume requested for task '" + name + "'. Waiting for engines to restart");
+            System.out.flush();
+
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                System.out.print(".");
+                System.out.flush();
+                TaskMeta current = tm.status(name);
+                if ("RUNNING".equals(current.getStatus())) {
+                    break;
+                }
+            }
+            System.out.println();
+            System.out.println("Task '" + name + "' resumed.");
             System.out.println();
         } catch (Exception e) {
             System.out.println();
