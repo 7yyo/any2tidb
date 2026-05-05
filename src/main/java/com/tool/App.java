@@ -611,7 +611,35 @@ public class App implements ApplicationRunner {
             }
             tm.stop(name);
             System.out.println();
-            System.out.println("Stop requested for task '" + name + "'. Waiting for graceful shutdown...");
+            System.out.print("Stop requested for task '" + name + "'. Waiting for graceful shutdown");
+            System.out.flush();
+
+            // Poll until the running process exits or timeout
+            long deadline = System.currentTimeMillis() + 30_000;
+            String status = "RUNNING";
+            while (System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                System.out.print(".");
+                System.out.flush();
+                TaskMeta current = tm.status(name);
+                if (!"RUNNING".equals(current.getStatus())) {
+                    status = current.getStatus();
+                    break;
+                }
+                // Also check if the lock was released (process died without updating meta)
+                Path lockFile = tm.getTaskDir(name).resolve(".lock");
+                try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
+                        lockFile, java.nio.file.StandardOpenOption.WRITE);
+                     java.nio.channels.FileLock ignored = ch.tryLock()) {
+                    // Lock acquired → process is gone
+                    status = "STOPPED";
+                    break;
+                } catch (Exception ignored2) {
+                    // Lock still held → process still running
+                }
+            }
+            System.out.println();
+            System.out.println("Task '" + name + "' " + status + ".");
             System.out.println();
         } catch (Exception e) {
             System.out.println();
