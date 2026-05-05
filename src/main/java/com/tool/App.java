@@ -3,10 +3,9 @@ package com.tool;
 import com.tool.config.AppConfig;
 import com.tool.loadgen.LoadGenerator;
 import com.tool.logging.Log;
+import com.tool.task.TaskLockedException;
 import com.tool.task.TaskManager;
 import com.tool.task.TaskMeta;
-import com.tool.task.PhaseInfo;
-import com.tool.task.PhaseState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,11 +65,12 @@ public class App implements ApplicationRunner {
         // Handle task subcommands before general help (so "task --help" works)
         if (args.length >= 1 && "task".equals(args[0])) {
             if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
-                System.out.println("Usage: any2tidb task list|show <name>");
+                System.out.println("Usage: any2tidb task list|show|delete <name>");
                 System.out.println();
                 System.out.println("Commands:");
-                System.out.println("  list         List all tasks with state and progress");
-                System.out.println("  show <name>  Show detailed status of a task");
+                System.out.println("  list           List all tasks");
+                System.out.println("  show <name>    Show detailed status of a task");
+                System.out.println("  delete <name>  Delete a task (rejected if running)");
                 return;
             }
             if (args.length >= 2) {
@@ -79,11 +79,13 @@ public class App implements ApplicationRunner {
                     taskList();
                 } else if ("show".equals(sub) && args.length >= 3) {
                     taskShow(args[2]);
+                } else if ("delete".equals(sub) && args.length >= 3) {
+                    taskDelete(args[2]);
                 } else {
-                    System.out.println("Usage: any2tidb task list|show <name>");
+                    System.out.println("Usage: any2tidb task list|show|delete <name>");
                 }
             } else {
-                System.out.println("Usage: any2tidb task list|show <name>");
+                System.out.println("Usage: any2tidb task list|show|delete <name>");
             }
             return;
         }
@@ -164,8 +166,9 @@ public class App implements ApplicationRunner {
         System.out.println("  --version     Print version");
         System.out.println();
         System.out.println("Task management:");
-        System.out.println("  any2tidb task list         List all tasks with state and progress");
-        System.out.println("  any2tidb task show <name>  Show detailed status of a task");
+        System.out.println("  any2tidb task list           List all tasks");
+        System.out.println("  any2tidb task show <name>    Show detailed status of a task");
+        System.out.println("  any2tidb task delete <name>  Delete a task (rejected if running)");
     }
 
     private static void printUsage(String source) {
@@ -185,21 +188,24 @@ public class App implements ApplicationRunner {
     }
 
     private static void printUsage(String source, String mode) {
+        boolean needTask = !"loadgen".equals(mode);
         System.out.println("any2tidb " + source + " " + mode + " — Any DB → TiDB Migration Tool");
         System.out.println();
-        System.out.println("Usage: any2tidb " + source + " " + mode + " [options]");
+        System.out.println("Usage: any2tidb " + source + " " + mode
+                + (needTask ? " --task=NAME [options]" : " [options]"));
         System.out.println();
         System.out.println("Options:");
+        if (needTask) {
+            System.out.println("  --task=NAME               (REQUIRED) Task name for execution record");
+        }
         System.out.println("  --log-level=LEVEL         DEBUG, INFO, WARN, ERROR (default: INFO)");
         if ("schema".equals(mode) || "dump".equals(mode)) {
             System.out.println("  --databases=db1,db2,...   Filter databases, e.g. HRDB,Inventory (default: all)");
             System.out.println("  --tables=t1,t2,...        Migrate only specified tables (default: all)");
-            System.out.println("  --stop-on-error=true|false  Stop on first table failure (default: true)");
         }
         if ("schema".equals(mode)) {
             System.out.println("  --dry-run                 Print DDL without executing (default: false)");
             System.out.println("  --drop-if-exists          DROP existing tables before creating (default: false)");
-            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("dump".equals(mode)) {
             System.out.println("  --output-dir=PATH         Output directory (default: dump-output)");
@@ -207,7 +213,6 @@ public class App implements ApplicationRunner {
             System.out.println("  --chunk-size=N            Rows per PK-range chunk (default: 200000)");
             System.out.println("  --concurrency=N           Concurrent table exports (default: 4)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
-            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("snapshot".equals(mode)) {
             System.out.println("  --databases=db1,db2,...   Only process specified databases (default: all)");
@@ -221,14 +226,12 @@ public class App implements ApplicationRunner {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
-            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("sync".equals(mode)) {
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
             System.out.println("  --meta-file=PATH          Snapshot meta JSON file (default: snapshot-meta.json)");
-            System.out.println("  --task=NAME               Task namespace for isolation (REQUIRED)");
         }
         if ("loadgen".equals(mode)) {
             System.out.println("  --database=NAME           Source database, e.g. HRDB (required)");
@@ -263,7 +266,7 @@ public class App implements ApplicationRunner {
     // ── Flag whitelists ───────────────────────────────────────────────────────
 
     private static final Set<String> COMMON_FLAGS = Set.of(
-            "dry-run", "databases", "tables", "drop-if-exists", "stop-on-error", "log-level", "task"
+            "dry-run", "databases", "tables", "drop-if-exists", "log-level", "task"
     );
     private static final Set<String> DUMP_FLAGS = Set.of(
             "output-dir", "file-size-mb", "chunk-size", "concurrency", "offset-storage-path"
@@ -390,26 +393,40 @@ public class App implements ApplicationRunner {
             return;
         }
 
-        // ── schema / dump ──
+        // ── schema ──
 
-        boolean dryRun         = args.containsOption("dry-run");
-        boolean dropIfExists   = args.containsOption("drop-if-exists");
-        boolean stopOnError    = true;
-        if (args.containsOption("stop-on-error")) {
-            List<String> vals = args.getOptionValues("stop-on-error");
-            if (!vals.isEmpty()) stopOnError = !"false".equalsIgnoreCase(vals.get(0));
+        if ("schema".equals(mode)) {
+            boolean dryRun         = args.containsOption("dry-run");
+            boolean dropIfExists   = args.containsOption("drop-if-exists");
+            List<String> databases = parseListOption(args, "databases");
+            List<String> tables    = parseListOption(args, "tables");
+
+            try {
+                new SchemaRunner(config, extractor, converter, writer, verifier, driver)
+                        .run(args, databases, tables, dryRun, dropIfExists);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println();
+                System.err.println("Error: " + e.getMessage());
+                System.err.println();
+            }
+            return;
         }
-        boolean continueOnError = !stopOnError;
-        List<String> databases = parseListOption(args, "databases");
-        List<String> tables    = parseListOption(args, "tables");
 
-        try {
-            new SchemaDumpRunner(config, extractor, converter, writer, verifier, driver)
-                    .run(args, mode, databases, tables, dryRun, dropIfExists, continueOnError);
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            System.err.println();
-            System.err.println("Error: " + e.getMessage());
-            System.err.println();
+        // ── dump ──
+
+        if ("dump".equals(mode)) {
+            List<String> databases = parseListOption(args, "databases");
+            List<String> tables    = parseListOption(args, "tables");
+
+            try {
+                new DumpRunner(config, extractor, driver)
+                        .run(args, databases, tables);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println();
+                System.err.println("Error: " + e.getMessage());
+                System.err.println();
+            }
+            return;
         }
     }
 
@@ -438,7 +455,9 @@ public class App implements ApplicationRunner {
         try {
             Path tasksRoot = Path.of("tasks");
             if (!Files.exists(tasksRoot)) {
+                System.out.println();
                 System.out.println("No tasks found.");
+                System.out.println();
                 return;
             }
             var taskDirs = Files.list(tasksRoot)
@@ -453,31 +472,24 @@ public class App implements ApplicationRunner {
                 return;
             }
             System.out.println();
-            System.out.printf("%-20s %-12s %-15s %-15s %s%n",
-                    "TASK", "STATE", "SOURCE", "TARGET", "PROGRESS");
-            System.out.println("-".repeat(90));
+            System.out.printf("%-24s %-10s %-10s %-15s %-15s%n",
+                    "TASK", "MODE", "STATUS", "SOURCE", "TARGET");
+            System.out.println("-".repeat(80));
             TaskManager tm = new TaskManager(tasksRoot);
             for (String name : taskDirs) {
                 try {
                     TaskMeta m = tm.status(name);
-                    PhaseInfo dump = m.getPhases().get("dump");
-                    PhaseInfo snap = m.getPhases().get("snapshot");
-                    String progress = "";
-                    if (dump != null && dump.getState() == PhaseState.DONE && dump.getRows() != null) {
-                        progress = String.format("%,d rows", dump.getRows());
-                    }
-                    if (snap != null && snap.getState() == PhaseState.DONE && snap.getRows() != null) {
-                        progress += (progress.isEmpty() ? "" : ", ") + String.format("%,d snap rows", snap.getRows());
-                    }
                     TaskMeta.SourceInfo src = m.getSource();
                     TaskMeta.TargetInfo tgt = m.getTarget();
-                    String sourceStr = src != null && src.getDatabase() != null ? src.getDatabase() : "?";
-                    String targetStr = tgt != null && tgt.getDatabase() != null ? tgt.getDatabase() : "?";
-                    System.out.printf("%-20s %-12s %-15s %-15s %s%n",
-                            name, m.getState() != null ? m.getState().toValue() : "?",
-                            sourceStr, targetStr, progress);
+                    String sourceStr = src != null && src.getDatabase() != null && !src.getDatabase().isEmpty() ? src.getDatabase() : "?";
+                    String targetStr = tgt != null && tgt.getDatabase() != null && !tgt.getDatabase().isEmpty() ? tgt.getDatabase() : "?";
+                    System.out.printf("%-24s %-10s %-10s %-15s %-15s%n",
+                            name,
+                            m.getMode() != null ? m.getMode() : "?",
+                            m.getStatus() != null ? m.getStatus() : "?",
+                            sourceStr, targetStr);
                 } catch (Exception e) {
-                    System.out.printf("%-20s %-12s %s%n", name, "error", e.getMessage());
+                    System.out.printf("%-24s %-10s %-10s%n", name, "?", "error");
                 }
             }
             System.out.println();
@@ -494,8 +506,21 @@ public class App implements ApplicationRunner {
             TaskMeta m = tm.status(name);
 
             System.out.println();
-            System.out.println("TASK: " + m.getTask());
+            System.out.println("TASK:    " + m.getTask());
+            System.out.println("Mode:    " + (m.getMode() != null ? m.getMode() : "?"));
+            System.out.println("Status:  " + (m.getStatus() != null ? m.getStatus() : "?"));
+            System.out.println("Created: " + m.getCreatedAt());
+            if (m.getStartedAt() != null) {
+                System.out.println("Started: " + m.getStartedAt());
+            }
+            if (m.getFinishedAt() != null) {
+                System.out.println("Finished:" + m.getFinishedAt());
+            }
+            if (m.getTables() != null) {
+                System.out.println("Tables:  " + m.getTables());
+            }
             System.out.println();
+
             TaskMeta.SourceInfo src = m.getSource();
             if (src != null) {
                 System.out.printf("Source:  %s %s:%d/%s%n",
@@ -512,39 +537,29 @@ public class App implements ApplicationRunner {
                         tgt.getPort(),
                         tgt.getDatabase() != null ? tgt.getDatabase() : "?");
             }
-            System.out.printf("State:   %s%n", m.getState() != null ? m.getState().toValue() : "?");
-            System.out.printf("Started: %s%n", m.getCreatedAt());
-            System.out.println();
 
-            System.out.println("Phases:");
-            for (var entry : m.getPhases().entrySet()) {
-                PhaseInfo p = entry.getValue();
-                String stateName = p.getState() != null ? p.getState().name().toLowerCase() : "pending";
-                String icon = switch (stateName) {
-                    case "done" -> "\u2713";
-                    case "running" -> "\u25cf";
-                    case "failed" -> "\u2717";
-                    default -> "\u25cb";
-                };
-                String line = String.format("  %-10s %s %-7s", entry.getKey(), icon, stateName);
-                if (p.getStartedAt() != null) {
-                    line += "  " + p.getStartedAt().substring(0, Math.min(19, p.getStartedAt().length())).replace("T", " ");
-                    if (p.getFinishedAt() != null) {
-                        line += " \u2014 " + p.getFinishedAt().substring(0, Math.min(19, p.getFinishedAt().length())).replace("T", " ");
-                    }
-                }
-                if (p.getTables() != null) line += "  " + p.getTables() + " tables";
-                if (p.getRows() != null) line += "  " + String.format("%,d rows", p.getRows());
-                System.out.println(line);
-            }
-
-            if (m.getErrors() != null && !m.getErrors().isEmpty()) {
+            if (m.getError() != null) {
                 System.out.println();
-                System.out.println("Errors:");
-                for (String err : m.getErrors()) {
-                    System.out.println("  - " + err);
-                }
+                System.out.println("Error: " + m.getError());
             }
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("Error: " + e.getMessage());
+            System.out.println();
+        }
+    }
+
+    private static void taskDelete(String name) {
+        try {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            tm.delete(name);
+            System.out.println();
+            System.out.println("Task '" + name + "' deleted.");
+            System.out.println();
+        } catch (TaskLockedException e) {
+            System.out.println();
+            System.out.println("Error: " + e.getMessage());
             System.out.println();
         } catch (Exception e) {
             System.out.println();
