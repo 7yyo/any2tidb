@@ -12,7 +12,6 @@ import com.tool.sync.SyncConfig;
 import com.tool.sync.SyncStep;
 import com.tool.task.TaskManager;
 import com.tool.task.TaskMeta;
-import com.tool.task.TaskState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -69,13 +68,19 @@ class SyncRunner {
             throw new IllegalArgumentException("--task=NAME requires a non-empty name");
         }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta = taskManager.resume(taskName);
-        String currentState = meta.getState() != null ? meta.getState().toValue() : "?";
-        if (!"snapshot".equals(currentState) && !"syncing".equals(currentState)) {
-            throw new IllegalStateException("Task " + taskName + " is in state " + currentState
-                    + ", expected snapshot. Run snapshot first.");
-        }
-        taskManager.transition(taskName, TaskState.SYNCING);
+        TaskMeta meta = taskManager.create(taskName, "sync", "sqlserver");
+        TaskMeta.SourceInfo src = meta.getSource();
+        src.setHost(config.getSource().getHost());
+        src.setPort(config.getSource().getPort());
+        src.setDatabase("");
+        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+        tgt.setType("tidb");
+        tgt.setHost(config.getTarget().getHost());
+        tgt.setPort(config.getTarget().getPort());
+        tgt.setDatabase("");
+        meta.setTarget(tgt);
+        taskManager.writeMeta(taskName, meta);
+
         App.resolveTaskPaths(taskName, taskManager, ctx);
         // Override syncConfig paths from task dir
         String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
@@ -99,9 +104,11 @@ class SyncRunner {
 
         try {
             if (result.isFatal()) {
-                taskManager.fail(taskName, result.message());
+                meta.markFailed(result.message());
+            } else {
+                meta.markSuccess();
             }
-            // Note: SYNCING has no terminal success state — sync runs until stopped
+            taskManager.writeMeta(taskName, meta);
         } finally {
             taskManager.unlock();
         }
