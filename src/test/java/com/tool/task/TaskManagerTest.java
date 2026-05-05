@@ -124,7 +124,7 @@ class TaskManagerTest {
         TaskMeta m = tm.status("status-test");
         assertEquals("status-test", m.getTask());
         assertEquals("schema", m.getMode());
-        assertEquals("running", m.getStatus());
+        assertEquals("RUNNING", m.getStatus());
     }
 
     @Test
