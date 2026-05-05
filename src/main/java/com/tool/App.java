@@ -528,41 +528,33 @@ public class App implements ApplicationRunner {
             TaskMeta m = tm.status(name);
 
             System.out.println();
-            System.out.println("TASK:    " + m.getTask());
-            System.out.println("Mode:    " + (m.getMode() != null ? m.getMode() : "?"));
-            System.out.println("Status:  " + (m.getStatus() != null ? m.getStatus() : "?"));
-            System.out.println("Created: " + m.getCreatedAt());
-            if (m.getStartedAt() != null) {
-                System.out.println("Started: " + m.getStartedAt());
+            System.out.println("Task:      " + m.getTask());
+            System.out.println("Mode:      " + (m.getMode() != null ? m.getMode() : "?"));
+            System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?"));
+            System.out.println("Created:   " + m.getCreatedAt());
+            if (m.getStartedAt() != null && !m.getStartedAt().equals(m.getCreatedAt())) {
+                System.out.println("Started:   " + m.getStartedAt());
             }
             if (m.getFinishedAt() != null) {
-                System.out.println("Finished:" + m.getFinishedAt());
+                System.out.println("Finished:  " + m.getFinishedAt());
             }
             if (m.getTables() != null) {
-                System.out.println("Tables:  " + m.getTables());
+                System.out.println("Tables:    " + m.getTables());
             }
             System.out.println();
 
             TaskMeta.SourceInfo src = m.getSource();
             if (src != null) {
-                System.out.printf("Source:  %s %s:%d/%s%n",
-                        src.getType() != null ? src.getType() : "?",
-                        src.getHost() != null ? src.getHost() : "?",
-                        src.getPort(),
-                        src.getDatabase() != null ? src.getDatabase() : "?");
+                System.out.println("Source:    " + peerStr(src));
             }
             TaskMeta.TargetInfo tgt = m.getTarget();
             if (tgt != null) {
-                System.out.printf("Target:  %s %s:%d/%s%n",
-                        tgt.getType() != null ? tgt.getType() : "?",
-                        tgt.getHost() != null ? tgt.getHost() : "?",
-                        tgt.getPort(),
-                        tgt.getDatabase() != null ? tgt.getDatabase() : "?");
+                System.out.println("Target:    " + peerStr(tgt));
             }
 
             if (m.getError() != null) {
                 System.out.println();
-                System.out.println("Error: " + m.getError());
+                System.out.println("Error:     " + m.getError());
             }
             System.out.println();
         } catch (Exception e) {

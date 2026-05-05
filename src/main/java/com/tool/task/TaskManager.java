@@ -174,31 +174,33 @@ public class TaskManager {
 
     private static void printTaskInfo(TaskMeta m) {
         System.out.println();
-        System.out.println("TASK:    " + m.getTask());
-        System.out.println("Mode:    " + (m.getMode() != null ? m.getMode() : "?"));
-        System.out.println("Status:  " + (m.getStatus() != null ? m.getStatus() : "?"));
-        System.out.println("Created: " + m.getCreatedAt());
+        System.out.println("Task:      " + m.getTask());
+        System.out.println("Mode:      " + (m.getMode() != null ? m.getMode() : "?"));
+        System.out.println("Status:    " + (m.getStatus() != null ? m.getStatus() : "?"));
+        System.out.println("Created:   " + m.getCreatedAt());
         if (m.getFinishedAt() != null) {
-            System.out.println("Finished: " + m.getFinishedAt());
+            System.out.println("Finished:  " + m.getFinishedAt());
         }
-        TaskMeta.SourceInfo src = m.getSource();
-        if (src != null) {
-            System.out.printf("Source:  %s %s:%d/%s%n",
-                    src.getType() != null ? src.getType() : "?",
-                    src.getHost() != null ? src.getHost() : "?",
-                    src.getPort(),
-                    src.getDatabase() != null && !src.getDatabase().isEmpty() ? src.getDatabase() : "?");
-        }
-        TaskMeta.TargetInfo tgt = m.getTarget();
-        if (tgt != null) {
-            System.out.printf("Target:  %s %s:%d/%s%n",
-                    tgt.getType() != null ? tgt.getType() : "?",
-                    tgt.getHost() != null ? tgt.getHost() : "?",
-                    tgt.getPort(),
-                    tgt.getDatabase() != null && !tgt.getDatabase().isEmpty() ? tgt.getDatabase() : "?");
-        }
+        System.out.println("Source:    " + peerStr(m.getSource()));
+        System.out.println("Target:    " + peerStr(m.getTarget()));
         if (m.getError() != null) {
-            System.out.println("Error:   " + m.getError());
+            System.out.println("Error:     " + m.getError());
         }
+    }
+
+    private static String peerStr(TaskMeta.SourceInfo s) {
+        if (s == null) return "?";
+        String host = s.getHost();
+        int port = s.getPort();
+        if (host == null || host.isEmpty()) return "?";
+        return host + ":" + port;
+    }
+
+    private static String peerStr(TaskMeta.TargetInfo t) {
+        if (t == null) return "?";
+        String host = t.getHost();
+        int port = t.getPort();
+        if (host == null || host.isEmpty()) return "?";
+        return host + ":" + port;
     }
 }
