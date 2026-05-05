@@ -507,10 +507,10 @@ public class App implements ApplicationRunner {
             System.out.println();
 
             // Header uses %-8s for STATUS; data rows use %s with pre-padded colored status
-            String hdrFmt = "%-20s  %-8s  %-8s  %-20s  %-20s  %-14s%n";
-            String rowFmt = "%-20s  %-8s  %s  %-20s  %-20s  %-14s%n";
+            String hdrFmt = "%-20s  %-8s  %-8s  %-26s  %-22s  %-14s%n";
+            String rowFmt = "%-20s  %-8s  %s  %-26s  %-22s  %-14s%n";
             String[] cols = {"TASK", "MODE", "STATUS", "SOURCE", "TARGET", "CREATED"};
-            int[] w     = {20, 8, 8, 20, 20, 14};
+            int[] w     = {20, 8, 8, 26, 22, 14};
             System.out.printf(hdrFmt, (Object[]) cols);
             for (int i = 0; i < w.length; i++) {
                 System.out.print("-".repeat(w[i]));
@@ -565,7 +565,8 @@ public class App implements ApplicationRunner {
         String host = s.getHost();
         int port = s.getPort();
         if (host == null || host.isEmpty()) return "?";
-        return host + ":" + port;
+        String type = s.getType() != null ? s.getType() : "?";
+        return type + ":" + host + ":" + port;
     }
 
     private static String peerStr(TaskMeta.TargetInfo t) {
@@ -573,7 +574,8 @@ public class App implements ApplicationRunner {
         String host = t.getHost();
         int port = t.getPort();
         if (host == null || host.isEmpty()) return "?";
-        return host + ":" + port;
+        String type = t.getType() != null ? t.getType() : "?";
+        return type + ":" + host + ":" + port;
     }
 
     private static void taskShow(String name) {
