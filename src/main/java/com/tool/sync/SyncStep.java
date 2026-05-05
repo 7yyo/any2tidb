@@ -177,6 +177,7 @@ public class SyncStep implements MigrationStep {
                     && taskManager.isStopRequested(taskName)) {
                 Log.info(log, "stop requested via task stop, shutting down engines gracefully");
                 stoppedByUser = true;
+                ctx.put("stopped", true);
                 for (var entry : engines.entrySet()) {
                     try { entry.getValue().close(); }
                     catch (Throwable ignored) {}

@@ -132,6 +132,8 @@ class SyncRunner {
         try {
             if (result.isFatal()) {
                 meta.markFailed(result.message());
+            } else if (Boolean.TRUE.equals(ctx.get("stopped", Boolean.class))) {
+                meta.markStopped();
             } else {
                 meta.markSuccess();
             }
