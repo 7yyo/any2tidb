@@ -466,43 +466,24 @@ public class App implements ApplicationRunner {
 
     private static void taskList() {
         try {
-            Path tasksRoot = Path.of("tasks");
-            if (!Files.exists(tasksRoot)) {
-                System.out.println();
-                System.out.println("No tasks found.");
-                System.out.println();
-                return;
-            }
-            var taskDirs = Files.list(tasksRoot)
-                    .filter(Files::isDirectory)
-                    .map(p -> p.getFileName().toString())
-                    .toList();
-            if (taskDirs.isEmpty()) {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            List<String> names = tm.list();
+            if (names.isEmpty()) {
                 System.out.println();
                 System.out.println("No tasks found.");
                 System.out.println();
                 return;
             }
 
-            // Sort by creation time (oldest first)
-            TaskManager tm = new TaskManager(tasksRoot);
             record TaskEntry(String name, TaskMeta meta) {}
             List<TaskEntry> entries = new ArrayList<>();
-            for (String name : taskDirs) {
+            for (String name : names) {
                 try {
                     entries.add(new TaskEntry(name, tm.status(name)));
                 } catch (Exception e) {
                     entries.add(new TaskEntry(name, null));
                 }
             }
-            entries.sort((a, b) -> {
-                String ta = a.meta != null ? a.meta.getCreatedAt() : "";
-                String tb = b.meta != null ? b.meta.getCreatedAt() : "";
-                if (ta.isEmpty() && tb.isEmpty()) return a.name.compareTo(b.name);
-                if (ta.isEmpty()) return 1;
-                if (tb.isEmpty()) return -1;
-                return ta.compareTo(tb);
-            });
 
             System.out.println();
 

@@ -1,10 +1,8 @@
 package com.tool.task;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 
-@JsonInclude(JsonInclude.Include.NON_NULL)
 public class TaskMeta {
     private String task;
     private String mode;        // "schema" | "dump" | "snapshot" | "sync"

@@ -1,7 +1,5 @@
 package com.tool.task;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import java.io.*;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -11,15 +9,14 @@ import java.util.stream.Collectors;
 
 public class TaskManager {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .enable(SerializationFeature.INDENT_OUTPUT);
-
     private final Path tasksRoot;
+    private final DbManager dbManager;
     private FileLock lock;
     private FileChannel lockChannel;
 
     public TaskManager(Path tasksRoot) {
         this.tasksRoot = tasksRoot;
+        this.dbManager = new DbManager(tasksRoot);
     }
 
     public TaskMeta create(String taskName, String mode, String sourceType) throws Exception {
@@ -74,7 +71,8 @@ public class TaskManager {
         Files.createDirectories(taskDir.resolve("output"));
 
         TaskMeta meta = TaskMeta.create(taskName, mode, sourceType);
-        writeMeta(taskDir, meta);
+        dbManager.ensureInitialized();
+        dbManager.insert(meta);
 
         return meta;
     }
@@ -100,6 +98,7 @@ public class TaskManager {
             }
         }
 
+        dbManager.deleteByTask(taskName);
         try (var stream = Files.walk(taskDir)) {
             stream.sorted(Comparator.reverseOrder())
                   .forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
@@ -123,11 +122,11 @@ public class TaskManager {
     }
 
     public TaskMeta readMeta(String taskName) throws Exception {
-        Path metaFile = tasksRoot.resolve(taskName).resolve("meta.json");
-        if (!Files.exists(metaFile)) {
-            throw new IllegalArgumentException("meta.json not found for task: " + taskName);
+        TaskMeta meta = dbManager.findByTask(taskName);
+        if (meta == null) {
+            throw new IllegalArgumentException("Task not found: " + taskName);
         }
-        return MAPPER.readValue(metaFile.toFile(), TaskMeta.class);
+        return meta;
     }
 
     public TaskMeta status(String taskName) throws Exception {
@@ -135,22 +134,14 @@ public class TaskManager {
     }
 
     public void writeMeta(String taskName, TaskMeta meta) throws Exception {
-        writeMeta(tasksRoot.resolve(taskName), meta);
-    }
-
-    private void writeMeta(Path taskDir, TaskMeta meta) throws Exception {
-        MAPPER.writeValue(taskDir.resolve("meta.json").toFile(), meta);
+        dbManager.update(meta);
     }
 
     public List<String> list() throws Exception {
-        if (!Files.exists(tasksRoot)) return List.of();
-        try (var stream = Files.list(tasksRoot)) {
-            return stream
-                    .filter(Files::isDirectory)
-                    .map(p -> p.getFileName().toString())
-                    .sorted()
-                    .collect(Collectors.toList());
-        }
+        dbManager.ensureInitialized();
+        return dbManager.findAll().stream()
+                .map(TaskMeta::getTask)
+                .collect(Collectors.toList());
     }
 
     public Path getTaskDir(String taskName) {
@@ -199,6 +190,7 @@ public class TaskManager {
     public void unlock() {
         try { if (lock != null && lock.isValid()) lock.release(); } catch (Exception ignored) {}
         try { if (lockChannel != null) lockChannel.close(); } catch (Exception ignored) {}
+        dbManager.close();
     }
 
     private String getLockPid(Path taskDir) {

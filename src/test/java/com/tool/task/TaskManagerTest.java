@@ -22,7 +22,7 @@ class TaskManagerTest {
         assertNotNull(meta.getCreatedAt());
         assertNotNull(meta.getStartedAt());
         assertTrue(tempDir.resolve("tasks/test-task/.lock").toFile().exists());
-        assertTrue(tempDir.resolve("tasks/test-task/meta.json").toFile().exists());
+        assertNotNull(tm.readMeta("test-task"));
         assertTrue(tempDir.resolve("tasks/test-task/offsets").toFile().exists());
         assertTrue(tempDir.resolve("tasks/test-task/history").toFile().exists());
         assertTrue(tempDir.resolve("tasks/test-task/output").toFile().exists());
@@ -128,8 +128,10 @@ class TaskManagerTest {
     }
 
     @Test
-    void readMetaThrowsForMissingMetaFile() {
+    void readMetaThrowsForMissingTask() throws Exception {
         TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
+        tm.create("existing", "dump", "sqlserver");
+        tm.unlock();
         assertThrows(IllegalArgumentException.class, () -> tm.readMeta("no-such-task"));
     }
 }
