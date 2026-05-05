@@ -2,66 +2,67 @@ package com.tool.task;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
-import java.util.*;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TaskMeta {
     private String task;
+    private String mode;        // "schema" | "dump" | "snapshot" | "sync"
     private SourceInfo source;
     private TargetInfo target;
-    private List<String> databases;
-    private TaskState state;
+    private String status;      // "running" | "success" | "failed"
     private String createdAt;
-    private Map<String, PhaseInfo> phases;
-    private List<String> errors;
+    private String startedAt;
+    private String finishedAt;
+    private Integer tables;
+    private String error;
 
     public TaskMeta() {}  // for Jackson deserialization
 
-    public static TaskMeta create(String taskName, String sourceType) {
+    public static TaskMeta create(String taskName, String mode, String sourceType) {
         TaskMeta m = new TaskMeta();
         m.task = taskName;
-        m.state = TaskState.CREATED;
+        m.mode = mode;
+        m.status = "running";
         m.createdAt = Instant.now().toString();
-        m.phases = new LinkedHashMap<>();
-        m.phases.put("dump", new PhaseInfo());
-        m.phases.put("snapshot", new PhaseInfo());
-        m.phases.put("sync", new PhaseInfo());
-        m.errors = new ArrayList<>();
+        m.startedAt = m.createdAt;
         SourceInfo src = new SourceInfo();
         src.setType(sourceType);
         m.source = src;
         return m;
     }
 
-    public void transitionTo(TaskState next) {
-        if (this.state == null) {
-            this.state = next;
-            return;
-        }
-        if (!this.state.canTransitionTo(next)) {
-            throw new IllegalStateException(
-                    "Cannot transition " + this.state + " → " + next + " for task " + task);
-        }
-        this.state = next;
+    public void markSuccess() {
+        this.status = "success";
+        this.finishedAt = Instant.now().toString();
+    }
+
+    public void markFailed(String err) {
+        this.status = "failed";
+        this.error = err;
+        this.finishedAt = Instant.now().toString();
     }
 
     // Getters and setters
     public String getTask() { return task; }
     public void setTask(String task) { this.task = task; }
+    public String getMode() { return mode; }
+    public void setMode(String mode) { this.mode = mode; }
     public SourceInfo getSource() { return source; }
     public void setSource(SourceInfo source) { this.source = source; }
     public TargetInfo getTarget() { return target; }
     public void setTarget(TargetInfo target) { this.target = target; }
-    public List<String> getDatabases() { return databases; }
-    public void setDatabases(List<String> databases) { this.databases = databases; }
-    public TaskState getState() { return state; }
-    public void setState(TaskState state) { transitionTo(state); }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
     public String getCreatedAt() { return createdAt; }
     public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
-    public Map<String, PhaseInfo> getPhases() { return phases; }
-    public void setPhases(Map<String, PhaseInfo> phases) { this.phases = phases; }
-    public List<String> getErrors() { return errors; }
-    public void setErrors(List<String> errors) { this.errors = errors; }
+    public String getStartedAt() { return startedAt; }
+    public void setStartedAt(String startedAt) { this.startedAt = startedAt; }
+    public String getFinishedAt() { return finishedAt; }
+    public void setFinishedAt(String finishedAt) { this.finishedAt = finishedAt; }
+    public Integer getTables() { return tables; }
+    public void setTables(Integer tables) { this.tables = tables; }
+    public String getError() { return error; }
+    public void setError(String error) { this.error = error; }
 
     public static class SourceInfo {
         private String type;
