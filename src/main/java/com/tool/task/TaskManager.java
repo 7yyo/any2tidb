@@ -179,7 +179,7 @@ public class TaskManager {
         System.out.println("Status:  " + (m.getStatus() != null ? m.getStatus() : "?"));
         System.out.println("Created: " + m.getCreatedAt());
         if (m.getFinishedAt() != null) {
-            System.out.println("Finished:" + m.getFinishedAt());
+            System.out.println("Finished: " + m.getFinishedAt());
         }
         TaskMeta.SourceInfo src = m.getSource();
         if (src != null) {
@@ -187,7 +187,7 @@ public class TaskManager {
                     src.getType() != null ? src.getType() : "?",
                     src.getHost() != null ? src.getHost() : "?",
                     src.getPort(),
-                    src.getDatabase() != null ? src.getDatabase() : "?");
+                    src.getDatabase() != null && !src.getDatabase().isEmpty() ? src.getDatabase() : "?");
         }
         TaskMeta.TargetInfo tgt = m.getTarget();
         if (tgt != null) {
@@ -195,7 +195,7 @@ public class TaskManager {
                     tgt.getType() != null ? tgt.getType() : "?",
                     tgt.getHost() != null ? tgt.getHost() : "?",
                     tgt.getPort(),
-                    tgt.getDatabase() != null ? tgt.getDatabase() : "?");
+                    tgt.getDatabase() != null && !tgt.getDatabase().isEmpty() ? tgt.getDatabase() : "?");
         }
         if (m.getError() != null) {
             System.out.println("Error:   " + m.getError());
