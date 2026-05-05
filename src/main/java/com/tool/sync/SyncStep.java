@@ -205,8 +205,10 @@ public class SyncStep implements MigrationStep {
             if (!shuttingDown.get()) {
                 try { Runtime.getRuntime().removeShutdownHook(shutdownHook); } catch (Exception ignored) {}
             }
-            executor.shutdownNow();
-            executor.awaitTermination(5, TimeUnit.SECONDS);
+            executor.shutdown();
+            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
 
             if (!engineErrors.isEmpty()) {
                 StringBuilder msg = new StringBuilder("Sync engine(s) failed: ");
@@ -305,8 +307,10 @@ public class SyncStep implements MigrationStep {
                     finally { done.countDown(); }
                 });
                 done.await();
-                exec.shutdownNow();
-                exec.awaitTermination(5, TimeUnit.SECONDS);
+                exec.shutdown();
+                if (!exec.awaitTermination(10, TimeUnit.SECONDS)) {
+                    exec.shutdownNow();
+                }
 
                 if (engineError.get() != null) {
                     Log.error(log, "schema_only failed", "database", db.dbName(),
