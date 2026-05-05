@@ -187,9 +187,10 @@ public class DumpStep implements MigrationStep {
                 "files", totalFiles,
                 "errors", errors,
                 "ms", totalMs);
-        return errors == 0
-                ? StepResult.ok("dump complete, tables=" + allResults.size() + " rows=" + totalRows)
-                : StepResult.ok("dump complete with " + errors + " errors, rows=" + totalRows);
+        if (errors > 0) {
+            return StepResult.fatal("dump failed with " + errors + " errors");
+        }
+        return StepResult.ok("dump complete, tables=" + allResults.size() + " rows=" + totalRows);
     }
 
     // ── Database Snapshot mode ───────────────────────────────────────────────
@@ -285,8 +286,6 @@ public class DumpStep implements MigrationStep {
             ExecutorService pool = Executors.newFixedThreadPool(concurrency);
             Map<String, CsvDumpWriter> writersByTable = new ConcurrentHashMap<>();
             List<Future<DumpTableResult>> futures = new ArrayList<>();
-            boolean continueOnError = Boolean.TRUE.equals(
-                    ctx.get("continueOnError", Boolean.class));
 
             for (PkRange range : allRanges) {
                 String tableKey = range.dbName() + "." + range.schema() + "." + range.table();
@@ -309,6 +308,10 @@ public class DumpStep implements MigrationStep {
                             "database", r.dbName(),
                             "table", r.schema() + "." + r.table(),
                             "error", r.error());
+                    for (Future<DumpTableResult> remaining : futures) {
+                        remaining.cancel(true);
+                    }
+                    break;
                 } else {
                     String tKey = r.dbName() + "." + r.schema() + "." + r.table();
                     DumpTableResult prev = tableAgg.get(tKey);
