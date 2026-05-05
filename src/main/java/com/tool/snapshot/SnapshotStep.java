@@ -171,7 +171,7 @@ public class SnapshotStep implements MigrationStep {
 
     private StepResult checkTargetTablesEmpty(List<String> dbNames, List<String> tables,
                                                AppConfig config) {
-        List<String> nonEmpty = new ArrayList<>();
+        List<String> errors = new ArrayList<>();
         for (String dbName : dbNames) {
             try (Connection srcConn = DriverManager.getConnection(
                     sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
@@ -185,14 +185,19 @@ public class SnapshotStep implements MigrationStep {
                         config.getTarget().getPassword())) {
                     for (String[] entry : tableList) {
                         String tableName = entry[1];
+                        String full = dbName + "." + tableName;
                         try (java.sql.Statement st = tidbConn.createStatement();
                              java.sql.ResultSet rs = st.executeQuery(
-                                     "SELECT COUNT(*) FROM `" + escapeBacktick(dbName) + "`.`" + escapeBacktick(tableName) + "`")) {
-                            if (rs.next() && rs.getLong(1) > 0) {
-                                nonEmpty.add(dbName + "." + tableName + " (" + rs.getLong(1) + " rows)");
+                                     "SELECT 1 FROM `" + escapeBacktick(dbName) + "`.`" + escapeBacktick(tableName) + "` LIMIT 1")) {
+                            if (rs.next()) {
+                                errors.add(full + " — not empty");
                             }
-                        } catch (Exception e) {
-                            // Table doesn't exist yet — fine, it's empty
+                        } catch (java.sql.SQLException e) {
+                            if ("42S02".equals(e.getSQLState())) {
+                                errors.add(full + " — table does not exist in TiDB (run schema first)");
+                            } else {
+                                errors.add(full + " — " + e.getMessage());
+                            }
                         }
                     }
                 }
@@ -200,9 +205,8 @@ public class SnapshotStep implements MigrationStep {
                 Log.warn(log, "failed to check target tables for " + dbName, "error", e.getMessage());
             }
         }
-        if (!nonEmpty.isEmpty()) {
-            return StepResult.fatal("Target TiDB tables are not empty — snapshot would duplicate data:\n"
-                    + String.join("\n", nonEmpty));
+        if (!errors.isEmpty()) {
+            return StepResult.fatal("Target TiDB pre-check failed:\n" + String.join("\n", errors));
         }
         return null;
     }
