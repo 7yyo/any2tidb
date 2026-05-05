@@ -2,6 +2,7 @@ package com.tool.task;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TaskMeta {
@@ -16,6 +17,9 @@ public class TaskMeta {
     private Integer tables;
     private String error;
 
+    private static final DateTimeFormatter FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z");
+
     public TaskMeta() {}  // for Jackson deserialization
 
     public static TaskMeta create(String taskName, String mode, String sourceType) {
@@ -23,7 +27,7 @@ public class TaskMeta {
         m.task = taskName;
         m.mode = mode;
         m.status = "running";
-        m.createdAt = OffsetDateTime.now().toString();
+        m.createdAt = OffsetDateTime.now().format(FMT).toString();
         m.startedAt = m.createdAt;
         SourceInfo src = new SourceInfo();
         src.setType(sourceType);
@@ -33,13 +37,13 @@ public class TaskMeta {
 
     public void markSuccess() {
         this.status = "success";
-        this.finishedAt = OffsetDateTime.now().toString();
+        this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }
 
     public void markFailed(String err) {
         this.status = "failed";
         this.error = err;
-        this.finishedAt = OffsetDateTime.now().toString();
+        this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }
 
     // Getters and setters
