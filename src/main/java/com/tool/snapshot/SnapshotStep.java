@@ -1,5 +1,7 @@
 package com.tool.snapshot;
 
+import static com.tool.common.SqlUtils.escapeBacktick;
+
 import com.tool.common.FilterUtils;
 import com.tool.config.AppConfig;
 import org.slf4j.Logger;
@@ -107,6 +109,10 @@ public class SnapshotStep implements MigrationStep {
             return StepResult.ok("no databases to snapshot");
         }
 
+        // Pre-check: target TiDB tables must be empty
+        StepResult emptyCheck = checkTargetTablesEmpty(dbNames, tables, config);
+        if (emptyCheck != null) return emptyCheck;
+
         // Check for stale offset/history files from previous snapshots
         List<String> staleDbs = new ArrayList<>();
         for (String dbName : dbNames) {
@@ -161,6 +167,44 @@ public class SnapshotStep implements MigrationStep {
             return StepResult.fatal("snapshot completed with errors");
         }
         return StepResult.ok("snapshot complete, databases=" + dbResults.size() + " rows=" + totalRows);
+    }
+
+    private StepResult checkTargetTablesEmpty(List<String> dbNames, List<String> tables,
+                                               AppConfig config) {
+        List<String> nonEmpty = new ArrayList<>();
+        for (String dbName : dbNames) {
+            try (Connection srcConn = DriverManager.getConnection(
+                    sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
+                    config.getSource().getUsername(),
+                    config.getSource().getPassword())) {
+                List<String[]> tableList = sourceDriver.schemaExtractor().listTables(srcConn, tables);
+                if (tableList.isEmpty()) continue;
+                try (Connection tidbConn = DriverManager.getConnection(
+                        config.getTarget().tidbJdbcUrl(),
+                        config.getTarget().getUsername(),
+                        config.getTarget().getPassword())) {
+                    for (String[] entry : tableList) {
+                        String tableName = entry[1];
+                        try (java.sql.Statement st = tidbConn.createStatement();
+                             java.sql.ResultSet rs = st.executeQuery(
+                                     "SELECT COUNT(*) FROM `" + escapeBacktick(dbName) + "`.`" + escapeBacktick(tableName) + "`")) {
+                            if (rs.next() && rs.getLong(1) > 0) {
+                                nonEmpty.add(dbName + "." + tableName + " (" + rs.getLong(1) + " rows)");
+                            }
+                        } catch (Exception e) {
+                            // Table doesn't exist yet — fine, it's empty
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.warn(log, "failed to check target tables for " + dbName, "error", e.getMessage());
+            }
+        }
+        if (!nonEmpty.isEmpty()) {
+            return StepResult.fatal("Target TiDB tables are not empty — snapshot would duplicate data:\n"
+                    + String.join("\n", nonEmpty));
+        }
+        return null;
     }
 
     private SnapshotDbResult snapshotDatabase(String dbName, List<String> tables,
