@@ -228,7 +228,7 @@ public class App implements ApplicationRunner {
             System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
         }
         if ("sync".equals(mode)) {
-            System.out.println("  --from-task=NAME          (IMPORTANT) Read offsets/history from a prior snapshot or dump task");
+            System.out.println("  --from-task=NAME          (REQUIRED) Read offsets/history from a prior snapshot or dump task");
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-storage-path=PATH  Debezium offset file dir (default: snapshot-offsets)");
             System.out.println("  --schema-history-path=PATH  Debezium schema history dir (default: snapshot-schema-history)");
