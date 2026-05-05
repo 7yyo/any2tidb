@@ -12,13 +12,11 @@ import com.tool.snapshot.SnapshotStep;
 import com.tool.source.SourceDriver;
 import com.tool.task.TaskManager;
 import com.tool.task.TaskMeta;
-import com.tool.task.TaskState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 
 import javax.sql.DataSource;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -74,33 +72,19 @@ class SnapshotRunner {
             throw new IllegalArgumentException("--task=NAME requires a non-empty name");
         }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta;
-        if (Files.exists(taskManager.getTaskDir(taskName))) {
-            meta = taskManager.resume(taskName);
-            String currentState = meta.getState().toValue();
-            if (!"created".equals(currentState) && !"snapshotting".equals(currentState)) {
-                throw new IllegalStateException("Task " + taskName + " is in state " + currentState
-                        + ", expected created or snapshotting.");
-            }
-        } else {
-            meta = taskManager.create(taskName, "sqlserver");
-            meta.setDatabases(databases != null ? databases : List.of());
-            // Set source/target from config
-            TaskMeta.SourceInfo src = new TaskMeta.SourceInfo();
-            src.setType("sqlserver");
-            src.setHost(config.getSource().getHost());
-            src.setPort(config.getSource().getPort());
-            src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
-            meta.setSource(src);
-            TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-            tgt.setType("tidb");
-            tgt.setHost(config.getTarget().getHost());
-            tgt.setPort(config.getTarget().getPort());
-            tgt.setDatabase("");
-            meta.setTarget(tgt);
-            taskManager.writeMeta(taskName, meta);
-        }
-        taskManager.transition(taskName, TaskState.SNAPSHOTTING);
+        TaskMeta meta = taskManager.create(taskName, "snapshot", "sqlserver");
+        TaskMeta.SourceInfo src = meta.getSource();
+        src.setHost(config.getSource().getHost());
+        src.setPort(config.getSource().getPort());
+        src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
+        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+        tgt.setType("tidb");
+        tgt.setHost(config.getTarget().getHost());
+        tgt.setPort(config.getTarget().getPort());
+        tgt.setDatabase("");
+        meta.setTarget(tgt);
+        taskManager.writeMeta(taskName, meta);
+
         App.resolveTaskPaths(taskName, taskManager, ctx);
         // Task dir provides defaults; CLI flags can override
         if (offsetStoragePath == null) {
@@ -123,10 +107,11 @@ class SnapshotRunner {
 
         try {
             if (!result.isFatal()) {
-                taskManager.transition(taskName, TaskState.SNAPSHOT);
+                meta.markSuccess();
             } else {
-                taskManager.fail(taskName, result.message());
+                meta.markFailed(result.message());
             }
+            taskManager.writeMeta(taskName, meta);
         } finally {
             taskManager.unlock();
         }
