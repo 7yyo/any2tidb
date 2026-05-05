@@ -206,7 +206,11 @@ public class SnapshotStep implements MigrationStep {
             }
         }
         if (!errors.isEmpty()) {
-            return StepResult.fatal("Target TiDB pre-check failed:\n" + String.join("\n", errors));
+            Log.error(log, "Target TiDB pre-check failed", "count", errors.size());
+            for (String err : errors) {
+                Log.error(log, "  " + err);
+            }
+            return StepResult.fatal("target tables not empty or missing — run schema first, or clean target");
         }
         return null;
     }
