@@ -157,6 +157,21 @@ public class TaskManager {
         return tasksRoot.resolve(taskName);
     }
 
+    /** Writes a .stop marker to signal a running sync task to graceful shutdown. */
+    public void stop(String taskName) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
+        if (!Files.exists(taskDir)) {
+            throw new IllegalArgumentException("Task not found: " + taskName);
+        }
+        Files.writeString(taskDir.resolve(".stop"),
+                java.time.OffsetDateTime.now().toString());
+    }
+
+    /** Checks whether the .stop marker exists for this task. */
+    public boolean isStopRequested(String taskName) {
+        return Files.exists(tasksRoot.resolve(taskName).resolve(".stop"));
+    }
+
     public void unlock() {
         try { if (lock != null && lock.isValid()) lock.release(); } catch (Exception ignored) {}
         try { if (lockChannel != null) lockChannel.close(); } catch (Exception ignored) {}

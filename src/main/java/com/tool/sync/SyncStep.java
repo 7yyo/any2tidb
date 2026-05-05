@@ -12,6 +12,7 @@ import com.tool.pipeline.StepResult;
 import com.tool.snapshot.model.SnapshotDbResult;
 import com.tool.snapshot.sink.SinkRecordConverter;
 import com.tool.source.SourceDriver;
+import com.tool.task.TaskManager;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 
@@ -167,10 +168,22 @@ public class SyncStep implements MigrationStep {
         }, "sync-shutdown");
         Runtime.getRuntime().addShutdownHook(shutdownHook);
 
-        // 7. Wait until all engines complete (or shutdown triggered)
-        try {
-            allDone.await();
-        } catch (InterruptedException ignored) {}
+        // 7. Wait until all engines complete or stop is requested
+        TaskManager taskManager = ctx.get("taskManager", TaskManager.class);
+        String taskName = ctx.get("taskName", String.class);
+        boolean stoppedByUser = false;
+        while (!allDone.await(2, TimeUnit.SECONDS)) {
+            if (taskManager != null && taskName != null
+                    && taskManager.isStopRequested(taskName)) {
+                Log.info(log, "stop requested via task stop, shutting down engines gracefully");
+                stoppedByUser = true;
+                for (var entry : engines.entrySet()) {
+                    try { entry.getValue().close(); }
+                    catch (Throwable ignored) {}
+                }
+                break;
+            }
+        }
 
         // 8. Cleanup
         if (!shuttingDown.get()) {
@@ -185,7 +198,9 @@ public class SyncStep implements MigrationStep {
                     msg.append(db).append("=").append(err.getMessage()).append("; "));
             return StepResult.fatal(msg.toString());
         }
-        return StepResult.ok("Sync stopped.");
+        return stoppedByUser
+                ? StepResult.ok("Sync stopped by user request.")
+                : StepResult.ok("Sync stopped.");
     }
 
     // ── schema history auto-init ─────────────────────────────────────────────

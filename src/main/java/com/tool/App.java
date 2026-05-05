@@ -65,12 +65,13 @@ public class App implements ApplicationRunner {
         // Handle task subcommands before general help (so "task --help" works)
         if (args.length >= 1 && "task".equals(args[0])) {
             if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
-                System.out.println("Usage: any2tidb task list|show|delete <name>");
+                System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
                 System.out.println();
                 System.out.println("Commands:");
                 System.out.println("  list           List all tasks");
                 System.out.println("  show <name>    Show detailed status of a task");
                 System.out.println("  delete <name>  Delete a task (rejected if running)");
+                System.out.println("  stop <name>    Gracefully stop a running sync task");
                 return;
             }
             if (args.length >= 2) {
@@ -81,11 +82,13 @@ public class App implements ApplicationRunner {
                     taskShow(args[2]);
                 } else if ("delete".equals(sub) && args.length >= 3) {
                     taskDelete(args[2]);
+                } else if ("stop".equals(sub) && args.length >= 3) {
+                    taskStop(args[2]);
                 } else {
-                    System.out.println("Usage: any2tidb task list|show|delete <name>");
+                    System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
                 }
             } else {
-                System.out.println("Usage: any2tidb task list|show|delete <name>");
+                System.out.println("Usage: any2tidb task list|show|delete|stop <name>");
             }
             return;
         }
@@ -169,6 +172,7 @@ public class App implements ApplicationRunner {
         System.out.println("  any2tidb task list           List all tasks");
         System.out.println("  any2tidb task show <name>    Show detailed status of a task");
         System.out.println("  any2tidb task delete <name>  Delete a task (rejected if running)");
+        System.out.println("  any2tidb task stop <name>    Gracefully stop a running sync task");
     }
 
     private static void printUsage(String source) {
@@ -581,6 +585,33 @@ public class App implements ApplicationRunner {
         } catch (TaskLockedException e) {
             System.out.println();
             System.out.println("Error: " + e.getMessage());
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println();
+            System.out.println("Error: " + e.getMessage());
+            System.out.println();
+        }
+    }
+
+    private static void taskStop(String name) {
+        try {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            TaskMeta meta = tm.status(name);
+            if (!"RUNNING".equals(meta.getStatus())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is not running (status: " + meta.getStatus() + ").");
+                System.out.println();
+                return;
+            }
+            if (!"sync".equals(meta.getMode())) {
+                System.out.println();
+                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be stopped.");
+                System.out.println();
+                return;
+            }
+            tm.stop(name);
+            System.out.println();
+            System.out.println("Stop requested for task '" + name + "'. Waiting for graceful shutdown...");
             System.out.println();
         } catch (Exception e) {
             System.out.println();
