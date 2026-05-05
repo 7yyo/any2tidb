@@ -1,7 +1,7 @@
 package com.tool.task;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import java.time.Instant;
+import java.time.ZonedDateTime;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TaskMeta {
@@ -23,7 +23,7 @@ public class TaskMeta {
         m.task = taskName;
         m.mode = mode;
         m.status = "running";
-        m.createdAt = Instant.now().toString();
+        m.createdAt = ZonedDateTime.now().toString();
         m.startedAt = m.createdAt;
         SourceInfo src = new SourceInfo();
         src.setType(sourceType);
@@ -33,13 +33,13 @@ public class TaskMeta {
 
     public void markSuccess() {
         this.status = "success";
-        this.finishedAt = Instant.now().toString();
+        this.finishedAt = ZonedDateTime.now().toString();
     }
 
     public void markFailed(String err) {
         this.status = "failed";
         this.error = err;
-        this.finishedAt = Instant.now().toString();
+        this.finishedAt = ZonedDateTime.now().toString();
     }
 
     // Getters and setters
