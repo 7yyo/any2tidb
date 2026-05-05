@@ -205,9 +205,15 @@ public class SyncStep implements MigrationStep {
             if (!shuttingDown.get()) {
                 try { Runtime.getRuntime().removeShutdownHook(shutdownHook); } catch (Exception ignored) {}
             }
+            // engine.close() (called above) is synchronous and blocks until
+            // offsets + schema history are fully flushed. The executor threads
+            // return from run() immediately after close(), so shutdown should
+            // be near-instant. Generous timeout as safety net only.
             executor.shutdown();
-            if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                Log.warn(log, "executor threads did not exit within 30s, forcing shutdown");
                 executor.shutdownNow();
+                executor.awaitTermination(5, TimeUnit.SECONDS);
             }
 
             if (!engineErrors.isEmpty()) {
@@ -308,8 +314,9 @@ public class SyncStep implements MigrationStep {
                 });
                 done.await();
                 exec.shutdown();
-                if (!exec.awaitTermination(10, TimeUnit.SECONDS)) {
+                if (!exec.awaitTermination(30, TimeUnit.SECONDS)) {
                     exec.shutdownNow();
+                    exec.awaitTermination(5, TimeUnit.SECONDS);
                 }
 
                 if (engineError.get() != null) {
