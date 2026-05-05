@@ -242,8 +242,13 @@ public class TiDBBatchWriter {
         long badRows = 0;
         StringBuilder firstError = new StringBuilder();
 
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
+        try (Connection conn = dataSource.getConnection()) {
+            // Disable FK checks so child tables can be inserted before parents.
+            // Debezium delivers snapshot events per-table in arbitrary order.
+            try (PreparedStatement fkStmt = conn.prepareStatement("SET FOREIGN_KEY_CHECKS = 0")) {
+                fkStmt.execute();
+            }
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
             for (Map<String, Object> row : rows) {
                 try {
                     converter.bind(ps, dbName, table, row, fields);
@@ -270,6 +275,7 @@ public class TiDBBatchWriter {
                     badRows += goodCount;
                 }
             }
+            } // close try (PreparedStatement ps)
         } catch (SQLException e) {
             Log.error(log, "flushBatch connection failed",
                     "table", dbName + "." + table,
