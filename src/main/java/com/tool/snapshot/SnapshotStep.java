@@ -409,8 +409,6 @@ public class SnapshotStep implements MigrationStep {
                                 db.isError() ? db.error() : null))
                         .toList();
                 tm.writeSnapshotResults(taskName, rows);
-                Log.info(log, "snapshot results written to database",
-                        "databases", dbResults.size(), "totalRows", totalRows);
             }
         } catch (Exception e) {
             Log.warn(log, "failed to write snapshot results", "error", e.getMessage());
