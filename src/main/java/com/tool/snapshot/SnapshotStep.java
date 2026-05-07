@@ -368,10 +368,13 @@ public class SnapshotStep implements MigrationStep {
                 long t1 = System.currentTimeMillis();
                 sink.logTableCounts();
                 finalRows = batchWriter.getTotalRows();
+                Log.info(log, "snapshot finished, flushing",
+                        "database", dbName, "totalRows", finalRows,
+                        "pendingRows", batchWriter.getPendingWrites());
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
-                Log.info(log, "snapshot finished", "database", dbName,
-                        "totalRows", finalRows, "flushMs", t2 - t1);
+                Log.info(log, "snapshot shutdown", "db", dbName,
+                        "executorShutdownMs", t1 - t0, "flushMs", t2 - t1);
             }
 
             return new SnapshotDbResult(dbName, tableList.size(),
