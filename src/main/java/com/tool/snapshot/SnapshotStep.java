@@ -439,8 +439,9 @@ public class SnapshotStep implements MigrationStep {
     }
 
     /**
-     * Write offset file for an empty database so sync can resume CDC from here.
-     * Schema history is not written — SyncStep.ensureSchemaHistory() handles it.
+     * Write offset and minimal schema history for an empty database so sync can
+     * resume CDC from here. Debezium needs a history file even for empty databases
+     * — otherwise the sync engine fails with "db history topic is missing".
      */
     private void writeEmptyDbOffsets(String dbName, SnapshotConfig snapshotConfig) {
         try {
@@ -452,12 +453,43 @@ public class SnapshotStep implements MigrationStep {
             }
             String debeziumLsn = com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium(hexLsn);
             String offsetPath = snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset";
+            String historyPath = snapshotConfig.schemaHistoryPath() + "/" + dbName + ".history";
             com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, dbName, debeziumLsn);
+            writeMinimalHistory(historyPath, dbName, debeziumLsn);
             Log.info(log, "offset written for empty database", "db", dbName,
                     "lsn", debeziumLsn);
         } catch (Exception e) {
             Log.warn(log, "failed to write offset for empty database, sync cannot resume",
                     "db", dbName, "error", e.getMessage());
+        }
+    }
+
+    /** Write a minimal schema history record so sync can start for empty databases. */
+    private static void writeMinimalHistory(String path, String dbName, String lsn) {
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(path).getParent());
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var node = mapper.createObjectNode();
+            node.putObject("source")
+                    .put("server", "any2tidb_" + dbName)
+                    .put("database", dbName);
+            node.putObject("position")
+                    .put("event_serial_no", 1)
+                    .put("commit_lsn", lsn)
+                    .put("change_lsn", "NULL")
+                    .put("snapshot", "INITIAL")
+                    .put("snapshot_completed", true);
+            node.put("ts_ms", System.currentTimeMillis());
+            node.put("databaseName", dbName);
+            node.put("schemaName", "dbo");
+            node.putArray("tableChanges");
+            try (java.io.PrintWriter pw = new java.io.PrintWriter(
+                    new java.io.FileWriter(path, java.nio.charset.StandardCharsets.UTF_8))) {
+                pw.println(mapper.writeValueAsString(node));
+            }
+        } catch (Exception e) {
+            Log.warn(LoggerFactory.getLogger(SnapshotStep.class),
+                    "failed to write minimal schema history", "db", dbName, "error", e.getMessage());
         }
     }
 
