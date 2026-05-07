@@ -1,7 +1,7 @@
 package com.tool;
 
+import ch.qos.logback.classic.Level;
 import com.tool.config.AppConfig;
-import com.tool.loadgen.LoadGenerator;
 import com.tool.logging.Log;
 import com.tool.task.TaskLockedException;
 import com.tool.task.TaskManager;
@@ -62,43 +62,38 @@ public class App implements ApplicationRunner {
         // Handle task subcommands before general help (so "task --help" works)
         if (args.length >= 1 && "task".equals(args[0])) {
             if (args.length >= 2 && ("--help".equals(args[1]) || "-h".equals(args[1]))) {
-                System.out.println("Usage: any2tidb task list|show|history|delete|clean|stop|pause|resume <task-name>");
-                System.out.println();
-                System.out.println("Commands:");
-                System.out.println("  list [--all]     List all tasks (--all includes deleted)");
-                System.out.println("  show <task-name>    Show detailed status of a task");
-                System.out.println("  history <task-name> Show operation history (audit trail)");
-                System.out.println("  delete <task-name>  Delete a task (rejected if running)");
-                System.out.println("  clean              Wipe ALL tasks, history, and results (asks y/N)");
-                System.out.println("  stop <task-name>    Gracefully stop a running sync task");
-                System.out.println("  pause <task-name>   Pause a running sync task");
-                System.out.println("  resume <task-name>  Resume a paused sync task");
+                printTaskUsage();
                 return;
             }
-            if (args.length >= 2) {
-                String sub = args[1];
-                if ("clean".equals(sub)) {
-                    taskClean();
-                } else if ("list".equals(sub)) {
-                    boolean showAll = args.length >= 3 && "--all".equals(args[2]);
-                    taskList(showAll);
-                } else if ("show".equals(sub) && args.length >= 3) {
-                    taskShow(args[2]);
-                } else if ("history".equals(sub) && args.length >= 3) {
-                    taskHistory(args[2]);
-                } else if ("delete".equals(sub) && args.length >= 3) {
-                    taskDelete(args[2]);
-                } else if ("stop".equals(sub) && args.length >= 3) {
-                    taskStop(args[2]);
-                } else if ("pause".equals(sub) && args.length >= 3) {
-                    taskPause(args[2]);
-                } else if ("resume".equals(sub) && args.length >= 3) {
-                    taskResume(args[2]);
-                } else {
-                    System.out.println("Usage: any2tidb task list|show|history|delete|clean|stop|pause|resume <task-name>");
-                }
+            if (args.length < 2) {
+                printTaskUsage();
+                return;
+            }
+            String a1 = args[1];
+            // top-level: list, clean
+            if ("list".equals(a1)) {
+                taskList(args.length >= 3 && "--all".equals(args[2]));
+                return;
+            }
+            if ("clean".equals(a1)) {
+                taskClean();
+                return;
+            }
+            // task <name> [action]
+            String name = a1;
+            if (args.length == 2) {
+                taskShow(name);
             } else {
-                System.out.println("Usage: any2tidb task list|show|history|delete|clean|stop|pause|resume <task-name>");
+                switch (args[2]) {
+                    case "stop"    -> taskStop(name);
+                    case "pause"   -> taskPause(name);
+                    case "resume"  -> taskResume(name);
+                    case "restart" -> taskRestart(name);
+                    case "delete"  -> taskDelete(name);
+                    case "history" -> taskHistory(name);
+                    default -> say("Usage: any2tidb task " + name + " stop|pause|resume|restart|delete|history"
+                            + "\nRun 'any2tidb task --help' for details.");
+                }
             }
             return;
         }
@@ -111,9 +106,10 @@ public class App implements ApplicationRunner {
                 String source = pos.get(0);
                 String mode   = pos.get(1);
                 if (!SOURCES.contains(source)) {
-                    System.out.println("Error: unknown source '" + source + "'. Valid: " + SOURCES);
-                } else if (!MODES.contains(mode)) {
-                    System.out.println("Error: unknown mode '" + mode + "'. Valid: " + MODES);
+                    sayError("unknown source '" + source + "'. Valid: " + SOURCES);
+                } else if (!modesFor(source).contains(mode)) {
+                    sayError("unknown mode '" + mode + "' for " + source
+                            + ". Valid: " + modesFor(source));
                 } else {
                     printUsage(source, mode);
                 }
@@ -121,11 +117,10 @@ public class App implements ApplicationRunner {
                 String arg = pos.get(0);
                 if (SOURCES.contains(arg)) {
                     printUsage(arg);
-                } else if (MODES.contains(arg)) {
-                    System.out.println("Error: source is required. Usage: any2tidb <source> " + arg);
+                } else if (SOURCES.stream().flatMap(s -> modesFor(s).stream()).anyMatch(arg::equals)) {
+                    sayError("source is required. Usage: any2tidb <source> " + arg);
                 } else {
-                    System.out.println("Error: unknown argument '" + arg + "'");
-                    System.out.println("Run 'any2tidb --help' for usage.");
+                    sayError("unknown argument '" + arg + "'\nRun 'any2tidb --help' for usage.");
                 }
             } else {
                 printUsage();
@@ -133,7 +128,18 @@ public class App implements ApplicationRunner {
             return;
         }
         if (Arrays.asList(args).contains("--version")) {
-            System.out.println("any2tidb 1.0.0");
+            String buildTime = "unknown";
+            try {
+                java.io.InputStream is = App.class.getClassLoader().getResourceAsStream("build.info");
+                if (is != null) {
+                    java.util.Properties p = new java.util.Properties();
+                    p.load(is);
+                    String val = p.getProperty("build.time");
+                    if (val != null) buildTime = val;
+                    is.close();
+                }
+            } catch (Exception ignored) {}
+            say("any2tidb 1.0.0\nBuilt: " + buildTime);
             return;
         }
         SpringApplication app = new SpringApplication(App.class);
@@ -145,7 +151,24 @@ public class App implements ApplicationRunner {
     // ── Help / Usage ──────────────────────────────────────────────────────────
 
     private static final Set<String> SOURCES = Set.of("sqlserver", "mysql");
-    private static final Set<String> MODES   = Set.of("schema", "dump", "snapshot", "sync", "loadgen");
+
+    private static List<String> modesFor(String source) {
+        return switch (source) {
+            case "mysql"     -> List.of("schema", "snapshot", "sync");
+            case "sqlserver" -> List.of("schema", "dump", "snapshot", "sync");
+            default          -> List.of();
+        };
+    }
+
+    private static String modeDescription(String mode) {
+        return switch (mode) {
+            case "schema"   -> "schema        Migrate schema (DDL) only";
+            case "dump"     -> "dump          Export data as CSV (Dumpling format)";
+            case "snapshot" -> "snapshot      Stream full data directly to TiDB via Debezium CDC";
+            case "sync"     -> "sync          Stream CDC changes to TiDB (requires prior snapshot)";
+            default         -> mode;
+        };
+    }
 
     private static List<String> positionalArgs(String[] args) {
         List<String> out = new ArrayList<>();
@@ -157,59 +180,42 @@ public class App implements ApplicationRunner {
     }
 
     private static void printUsage() {
+        System.out.println();
         System.out.println("any2tidb — Any DB → TiDB Migration Tool");
         System.out.println();
         System.out.println("Usage: any2tidb <source> <mode> [options]");
+        System.out.println("       any2tidb task <command> [args]");
         System.out.println();
         System.out.println("Sources:");
         for (String s : SOURCES) System.out.println("  " + s);
         System.out.println();
-        System.out.println("Modes:");
-        System.out.println("  schema        Migrate schema (DDL) only");
-        System.out.println("  dump          Export data as CSV (Dumpling format)");
-        System.out.println("  snapshot      Stream full data directly to TiDB via Debezium CDC");
-        System.out.println("  sync          Stream CDC changes to TiDB (requires prior snapshot)");
-        System.out.println("  loadgen       Generate continuous CRUD load on source database");
+        System.out.println("Each source supports different modes. Run 'any2tidb <source> --help'");
+        System.out.println("to see available modes. Run 'any2tidb task --help' for task management.");
         System.out.println();
-        System.out.println("Run 'any2tidb <source> --help' for source-specific options.");
-        System.out.println("Run 'any2tidb <source> <mode> --help' for mode-specific options.");
-        System.out.println();
-        System.out.println("Other:");
-        System.out.println("  --help, -h    Show this help");
-        System.out.println("  --version     Print version");
-        System.out.println();
-        System.out.println("Task management:");
-        System.out.println("  any2tidb task list [--all]   List all tasks (--all includes deleted)");
-        System.out.println("  any2tidb task show <task-name>    Show detailed status of a task");
-        System.out.println("  any2tidb task history <task-name> Show operation history (audit trail)");
-        System.out.println("  any2tidb task delete <task-name>  Delete a task (rejected if running)");
-        System.out.println("  any2tidb task stop <task-name>    Gracefully stop a running/paused sync");
-        System.out.println("  any2tidb task pause <task-name>   Pause a running sync task");
-        System.out.println("  any2tidb task resume <task-name>  Resume a paused sync task");
     }
 
     private static void printUsage(String source) {
+        System.out.println();
         System.out.println("any2tidb " + source + " — Any DB → TiDB Migration Tool");
         System.out.println();
         System.out.println("Usage: any2tidb " + source + " <mode> [options]");
         System.out.println();
         System.out.println("Modes:");
-        System.out.println("  schema        Migrate schema (DDL) only");
-        System.out.println("  dump          Export data as CSV (Dumpling format)");
-        System.out.println("  snapshot      Stream full data directly to TiDB via Debezium CDC");
-        System.out.println("  sync          Stream CDC changes to TiDB (requires prior snapshot)");
-        System.out.println("  loadgen       Generate continuous CRUD load on source database");
-        System.out.println();
+        for (String m : modesFor(source)) {
+            System.out.println("  " + modeDescription(m));
+        }
         System.out.println();
         System.out.println("Run 'any2tidb " + source + " <mode> --help' for mode-specific options.");
+        System.out.println();
     }
 
     private static void printUsage(String source, String mode) {
-        boolean needTask = !"loadgen".equals(mode);
+        boolean needTask = true;
+        System.out.println();
         System.out.println("any2tidb " + source + " " + mode + " — Any DB → TiDB Migration Tool");
         System.out.println();
         System.out.println("Usage: any2tidb " + source + " " + mode
-                + (needTask ? " [--task=NAME] [options]" : " [options]"));
+                + " [--task=NAME] [options]");
         System.out.println();
         System.out.println("Options:");
         if (needTask) {
@@ -223,38 +229,55 @@ public class App implements ApplicationRunner {
         if ("schema".equals(mode)) {
             System.out.println("  --dry-run                 Print DDL without executing (default: false)");
             System.out.println("  --drop-if-exists          DROP existing tables before creating (default: false)");
+            System.out.println("  --schema-db-threads=N     Process N databases concurrently (default: 1)");
         }
         if ("dump".equals(mode)) {
             System.out.println("  --output-dir=PATH         Output directory (default: dump-output)");
             System.out.println("  --file-size-mb=N          Max CSV file size in MB, 0=unlimited (default: 256)");
             System.out.println("  --chunk-size=N            Rows per PK-range chunk (default: 200000)");
             System.out.println("  --concurrency=N           Concurrent table exports (default: 4)");
+            System.out.println("  --no-snapshot             Dump directly from live database, skip DB snapshot");
         }
         if ("snapshot".equals(mode)) {
             System.out.println("  --databases=db1,db2,...   Only process specified databases (default: all)");
             System.out.println("  --tables=t1,t2,...        Only process specified tables (default: all)");
-            System.out.println("  --batch-size=N            INSERT batch size (default: 10000)");
-            System.out.println("  --fetch-size=N            Debezium snapshot fetch size (default: 10000)");
-            System.out.println("  --snapshot-threads=N      Parallel chunk threads (default: 1)");
-            System.out.println("  --max-queue-size=N        Debezium engine max queue size (default: 16384)");
+            System.out.println("  --snapshot-threads=N      Tables snapshotted in parallel, and TiDB write threads (default: 1)");
+            System.out.println("  --snapshot-db-threads=N   Process N databases concurrently (default: 1)");
+            System.out.println("  --batch-size=N            Rows per INSERT batch to TiDB (default: 500)");
+            System.out.println("  --fetch-size=N            Rows per JDBC fetch from source during snapshot (default: 10000)");
+            System.out.println("  --max-queue-size=N        Debezium internal queue capacity (default: 16384)");
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
-            System.out.println("  --offset-commit-interval-ms=N  Offset flush interval in ms (default: 10000)");
-            System.out.println("  --snapshot-max-threads-multiplier=N  Thread multiplier (default: 1.0)");
+            System.out.println("  --offset-flush-ms=N       Offset file flush interval in ms (default: 10000)");
         }
         if ("sync".equals(mode)) {
             System.out.println("  --from-task=NAME          (REQUIRED) Read offsets/history from a prior snapshot or dump task");
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
         }
-        if ("loadgen".equals(mode)) {
-            System.out.println("  --database=NAME           Source database, e.g. HRDB (required)");
-            System.out.println("  --rate=N                  Operations per second (default: 5)");
-            System.out.println("  --duration=N              Run duration in seconds, 0=forever (default: 0)");
-            System.out.println();
-            System.out.println("  Targets hr.employees and hr.departments (hardcoded).");
-        }
         System.out.println("  --log-level=LEVEL         DEBUG, INFO, WARN, ERROR (default: INFO)");
         System.out.println();
         System.out.println("Configuration: application.yml in working directory (source/target connection only)");
+        System.out.println();
+    }
+
+    private static void printTaskUsage() {
+        System.out.println();
+        System.out.println("Usage: any2tidb task <command|task-name> [action]");
+        System.out.println();
+        System.out.println("Inspect:");
+        System.out.println("  list [--all]            List all tasks (--all includes deleted)");
+        System.out.println("  <task-name>             Show task detail and available actions");
+        System.out.println();
+        System.out.println("Control a task:");
+        System.out.println("  any2tidb task <task-name> stop       Gracefully stop");
+        System.out.println("  any2tidb task <task-name> pause      Pause");
+        System.out.println("  any2tidb task <task-name> resume     Resume");
+        System.out.println("  any2tidb task <task-name> restart    Restart a crashed task");
+        System.out.println();
+        System.out.println("Housekeeping:");
+        System.out.println("  any2tidb task <task-name> delete     Delete (rejected if running)");
+        System.out.println("  any2tidb task <task-name> history    Show operation history");
+        System.out.println("  any2tidb task clean                  Wipe ALL tasks");
+        System.out.println();
     }
 
     // ── CLI helpers ───────────────────────────────────────────────────────────
@@ -276,24 +299,45 @@ public class App implements ApplicationRunner {
         catch (NumberFormatException e) { return defaultVal; }
     }
 
+    static void applyLogLevel(ApplicationArguments args) {
+        if (!args.containsOption("log-level")) return;
+        String val = args.getOptionValues("log-level").get(0).toUpperCase();
+        Level lbLevel;
+        switch (val) {
+            case "DEBUG" -> lbLevel = Level.DEBUG;
+            case "INFO"  -> lbLevel = Level.INFO;
+            case "WARN"  -> lbLevel = Level.WARN;
+            case "ERROR" -> lbLevel = Level.ERROR;
+            default -> {
+                sayErr("invalid --log-level '" + val + "', valid: DEBUG, INFO, WARN, ERROR");
+                return;
+            }
+        }
+        // com.tool follows the chosen level
+        ch.qos.logback.classic.Logger toolLogger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("com.tool");
+        toolLogger.setLevel(lbLevel);
+        // io.debezium: visible only in DEBUG, otherwise OFF
+        ch.qos.logback.classic.Logger debezLogger =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger("io.debezium");
+        debezLogger.setLevel(lbLevel == Level.DEBUG ? Level.DEBUG : Level.OFF);
+    }
+
     // ── Flag whitelists ───────────────────────────────────────────────────────
 
     private static final Set<String> COMMON_FLAGS = Set.of(
-            "dry-run", "databases", "tables", "drop-if-exists", "log-level", "task", "daemon"
+            "dry-run", "databases", "tables", "drop-if-exists", "log-level", "task", "daemon",
+            "schema-db-threads"
     );
     private static final Set<String> DUMP_FLAGS = Set.of(
-            "output-dir", "file-size-mb", "chunk-size", "concurrency"
+            "output-dir", "file-size-mb", "chunk-size", "concurrency", "no-snapshot"
     );
     private static final Set<String> SNAPSHOT_FLAGS = Set.of(
-            "batch-size", "fetch-size", "snapshot-threads",
-            "max-queue-size", "poll-interval-ms", "offset-commit-interval-ms",
-            "snapshot-max-threads-multiplier"
+            "batch-size", "fetch-size", "snapshot-threads", "snapshot-db-threads",
+            "max-queue-size", "poll-interval-ms", "offset-flush-ms"
     );
     private static final Set<String> SYNC_FLAGS = Set.of(
             "poll-interval-ms", "from-task"
-    );
-    private static final Set<String> LOADGEN_FLAGS = Set.of(
-            "database", "rate", "duration"
     );
 
     private Set<String> knownFlags(String source, String mode, SourceDriver driver) {
@@ -301,7 +345,6 @@ public class App implements ApplicationRunner {
         if ("dump".equals(mode))     s.addAll(DUMP_FLAGS);
         if ("snapshot".equals(mode)) s.addAll(SNAPSHOT_FLAGS);
         if ("sync".equals(mode))     s.addAll(SYNC_FLAGS);
-        if ("loadgen".equals(mode))  s.addAll(LOADGEN_FLAGS);
         s.addAll(driver.ownFlags());
         return s;
     }
@@ -323,8 +366,7 @@ public class App implements ApplicationRunner {
      * a child JVM to do the actual work.  The child runs with {@code --no-interactive}
      * so it never prompts for a TTY again.
      */
-    private static void launchDaemon(ApplicationArguments args) throws Exception {
-        String taskName = args.getOptionValues("task").get(0);
+    private static void launchDaemon(ApplicationArguments args, String taskName) throws Exception {
 
         // ── resolve name conflict BEFORE forking (we still have a TTY) ──
         TaskManager tm = new TaskManager(java.nio.file.Path.of("tasks"));
@@ -356,7 +398,7 @@ public class App implements ApplicationRunner {
                 String answer = System.console() != null
                         ? System.console().readLine().trim().toLowerCase() : "n";
                 if (!"y".equals(answer) && !"yes".equals(answer)) {
-                    System.out.println("Aborted.");
+                    say("Aborted.");
                     return;
                 }
                 tm.delete(taskName);
@@ -365,7 +407,21 @@ public class App implements ApplicationRunner {
             // task doesn't exist — fine, proceed
         }
 
-        // ── build child command ──
+        // ── build child args (filter out --daemon) ──
+        List<String> childArgs = new ArrayList<>();
+        for (String a : args.getSourceArgs()) {
+            if (!"--daemon".equals(a)) childArgs.add(a);
+        }
+
+        long pid = launchChildProcess(childArgs);
+        say("Task '" + taskName + "' started in background (PID: " + pid + ")\nUse 'any2tidb task list' to check status.");
+    }
+
+    /**
+     * Launches a child JVM with the given source args (must NOT contain --daemon).
+     * Returns the PID of the child process.
+     */
+    private static long launchChildProcess(List<String> sourceArgs) throws Exception {
         String classpath = System.getProperty("java.class.path");
         String jarPath = null;
         for (String entry : classpath.split(java.io.File.pathSeparator)) {
@@ -381,23 +437,36 @@ public class App implements ApplicationRunner {
         cmd.add(System.getProperty("java.home") + "/bin/java");
         cmd.add("-jar");
         cmd.add(jarPath);
-        for (String a : args.getSourceArgs()) {
-            if (!"--daemon".equals(a)) cmd.add(a);
-        }
+        cmd.addAll(sourceArgs);
 
         Process p = new ProcessBuilder(cmd)
                 .redirectOutput(ProcessBuilder.Redirect.INHERIT)
                 .redirectError(ProcessBuilder.Redirect.INHERIT)
                 .redirectInput(new java.io.File("/dev/null"))
                 .start();
-        long pid = p.pid();
-        System.out.println();
-        System.out.println("Task '" + taskName + "' started in background (PID: " + pid + ")");
-        System.out.println("Use 'any2tidb task list' to check status.");
-        System.out.println();
+        return p.pid();
     }
 
     // ── Shared helpers ────────────────────────────────────────────────────────
+
+    /** Print a message wrapped in leading/trailing blank lines. */
+    private static void say(String msg) {
+        System.out.println();
+        System.out.println(msg);
+        System.out.println();
+    }
+
+    /** Print an error message wrapped in leading/trailing blank lines. */
+    private static void sayError(String msg) {
+        say("Error: " + msg);
+    }
+
+    /** Print a message to stderr wrapped in leading/trailing blank lines. */
+    private static void sayErr(String msg) {
+        System.err.println();
+        System.err.println(msg);
+        System.err.println();
+    }
 
     static void handleResult(StepResult result, StepContext ctx) {
         Logger log = LoggerFactory.getLogger(App.class);
@@ -410,13 +479,13 @@ public class App implements ApplicationRunner {
         if (totalFailed != null && totalFailed > 0) System.exit(1);
     }
 
-    private DataSource createTargetDataSource() {
+    private DataSource createTargetDataSource(int dbThreads) {
         var db = config.getTarget();
         HikariConfig hikari = new HikariConfig();
         hikari.setJdbcUrl(db.tidbJdbcUrl());
         hikari.setUsername(db.getUsername());
         hikari.setPassword(db.getPassword());
-        hikari.setMaximumPoolSize(10);
+        hikari.setMaximumPoolSize(Math.max(10, dbThreads * 5 + 5));
         hikari.setMinimumIdle(1);
         hikari.setConnectionTimeout(30000);
         return new HikariDataSource(hikari);
@@ -434,53 +503,46 @@ public class App implements ApplicationRunner {
     public void run(ApplicationArguments args) throws Exception {
         List<String> pos = args.getNonOptionArgs();
         if (pos.size() < 2) {
-            System.out.println("Usage: any2tidb <source> <mode> [options]");
+            say("Usage: any2tidb <source> <mode> [options]");
             return;
         }
         String source = pos.get(0);
         String mode   = pos.get(1);
 
         if (!SOURCES.contains(source)) {
-            System.out.println("Error: unknown source '" + source + "'. Valid: " + SOURCES);
+            sayError("unknown source '" + source + "'. Valid: " + SOURCES);
             return;
         }
-        if (!MODES.contains(mode)) {
-            System.out.println("Error: unknown mode '" + mode + "'. Valid: " + MODES);
-            return;
-        }
-
         SourceDriver driver = selectDriver(source);
+
+        if (!driver.supportedModes().contains(mode)) {
+            sayError("unknown mode '" + mode + "' for " + source + ". Valid: " + driver.supportedModes());
+            return;
+        }
 
         Set<String> allowed = knownFlags(source, mode, driver);
         for (String name : args.getOptionNames()) {
             if (!allowed.contains(name)) {
-                System.out.println("Error: unknown option --" + name + " for " + source + " " + mode);
-                System.out.println("Run 'any2tidb " + source + " " + mode + " --help' for usage.");
+                sayError("unknown option --" + name + " for " + source + " " + mode
+                        + "\nRun 'any2tidb " + source + " " + mode + " --help' for usage.");
                 return;
             }
         }
 
+        applyLogLevel(args);
+
         // ── Daemon ──
         if (args.containsOption("daemon")) {
-            // validate --task
-            if (!args.containsOption("task")) {
-                System.err.println("Error: --daemon requires --task=NAME.");
-                return;
-            }
-            String taskName = args.getOptionValues("task").get(0);
-            if (taskName.isBlank()) {
-                System.err.println("Error: --task=NAME requires a non-empty name");
-                return;
-            }
+            String taskName = resolveTaskName(args, source, mode);
             // validate --from-task (sync)
             if ("sync".equals(mode)) {
                 if (!args.containsOption("from-task") || args.getOptionValues("from-task").isEmpty()) {
-                    System.err.println("Error: --from-task=NAME is required for sync mode");
+                    sayErr("--from-task=NAME is required for sync mode");
                     return;
                 }
                 String fromTask = args.getOptionValues("from-task").get(0);
                 if (fromTask.isBlank()) {
-                    System.err.println("Error: --from-task=NAME requires a non-empty name");
+                    sayErr("--from-task=NAME requires a non-empty name");
                     return;
                 }
                 // verify parent task exists before forking
@@ -488,16 +550,16 @@ public class App implements ApplicationRunner {
                 try {
                     TaskMeta parent = preTm.readMeta(fromTask);
                     if (!"snapshot".equals(parent.getMode()) && !"dump".equals(parent.getMode())) {
-                        System.err.println("Error: --from-task '" + fromTask
+                        sayErr("--from-task '" + fromTask
                                 + "' is a " + parent.getMode() + " task, must be snapshot or dump");
                         return;
                     }
                 } catch (IllegalArgumentException e) {
-                    System.err.println("Error: --from-task '" + fromTask + "' not found");
+                    sayErr("--from-task '" + fromTask + "' not found");
                     return;
                 }
             }
-            launchDaemon(args);
+            launchDaemon(args, taskName);
             return;
         }
 
@@ -506,13 +568,12 @@ public class App implements ApplicationRunner {
         if ("snapshot".equals(mode)) {
             List<String> databases = parseListOption(args, "databases");
             List<String> tables    = parseListOption(args, "tables");
-            DataSource targetDs = createTargetDataSource();
+            int dbThreads = parseIntOption(args, "snapshot-db-threads", 1);
+            DataSource targetDs = createTargetDataSource(dbThreads);
             try {
-                new SnapshotRunner(config, targetDs, driver).run(args, databases, tables);
+                new SnapshotRunner(config, targetDs, driver).run(args, databases, tables, dbThreads);
             } catch (IllegalArgumentException | IllegalStateException e) {
-                System.err.println();
-                System.err.println("Error: " + e.getMessage());
-                System.err.println();
+                sayErr("Error: " + e.getMessage());
             } finally {
                 closeDataSource(targetDs);
             }
@@ -520,21 +581,14 @@ public class App implements ApplicationRunner {
         }
 
         if ("sync".equals(mode)) {
-            DataSource targetDs = createTargetDataSource();
+            DataSource targetDs = createTargetDataSource(1);
             try {
                 new SyncRunner(config, targetDs, driver).run(args);
             } catch (IllegalArgumentException | IllegalStateException e) {
-                System.err.println();
-                System.err.println("Error: " + e.getMessage());
-                System.err.println();
+                sayErr("Error: " + e.getMessage());
             } finally {
                 closeDataSource(targetDs);
             }
-            return;
-        }
-
-        if ("loadgen".equals(mode)) {
-            runLoadGen(args);
             return;
         }
 
@@ -545,15 +599,14 @@ public class App implements ApplicationRunner {
             boolean dropIfExists   = args.containsOption("drop-if-exists");
             List<String> databases = parseListOption(args, "databases");
             List<String> tables    = parseListOption(args, "tables");
+            int dbThreads          = parseIntOption(args, "schema-db-threads", 1);
 
             try {
                 new SchemaRunner(config, driver.schemaExtractor(),
                         writer, driver.verifier(), driver)
-                        .run(args, databases, tables, dryRun, dropIfExists);
+                        .run(args, databases, tables, dryRun, dropIfExists, dbThreads);
             } catch (IllegalArgumentException | IllegalStateException e) {
-                System.err.println();
-                System.err.println("Error: " + e.getMessage());
-                System.err.println();
+                sayErr("Error: " + e.getMessage());
             }
             return;
         }
@@ -568,34 +621,23 @@ public class App implements ApplicationRunner {
                 new DumpRunner(config, driver.schemaExtractor(), driver)
                         .run(args, databases, tables);
             } catch (IllegalArgumentException | IllegalStateException e) {
-                System.err.println();
-                System.err.println("Error: " + e.getMessage());
-                System.err.println();
+                sayErr("Error: " + e.getMessage());
             }
             return;
         }
     }
 
-    private void runLoadGen(ApplicationArguments args) throws Exception {
-        String database = args.containsOption("database")
-                ? args.getOptionValues("database").get(0) : null;
-        int rate = parseIntOption(args, "rate", 5);
-        int duration = parseIntOption(args, "duration", 0);
-
-        if (database == null || database.isBlank()) {
-            System.out.println("Error: --database is required for loadgen mode");
-            System.exit(1);
-        }
-
-        Logger log = LoggerFactory.getLogger(App.class);
-        Log.info(log, "loadgen mode — hr.employees + hr.departments CRUD load");
-
-        LoadGenerator gen = new LoadGenerator(
-                config.getSource(), database, rate, duration);
-        gen.start();
-    }
-
     // ── Task subcommands ─────────────────────────────────────────────────────
+
+    private static String availableActions(String status) {
+        if (status == null) return "";
+        return switch (status) {
+            case "RUNNING" -> "stop | pause";
+            case "PAUSED"  -> "resume | stop";
+            case "CRASHED" -> "restart";
+            default         -> "";
+        };
+    }
 
     private static void taskList(boolean showAll) {
         try {
@@ -619,17 +661,14 @@ public class App implements ApplicationRunner {
             for (TaskMeta m : metas) {
                 if (m != null && "RUNNING".equals(m.getStatus()) && m.getPid() != null && !m.getPid().isEmpty()) {
                     if (!isPidAlive(m.getPid())) {
-                        m.setStatus("FAILED");
-                        m.setError("process " + m.getPid() + " terminated unexpectedly");
+                        m.markCrashed("process " + m.getPid() + " terminated unexpectedly");
                         try { tm.writeMeta(m.getTask(), m); } catch (Exception ignored) {}
                     }
                 }
             }
 
             if (metas.isEmpty()) {
-                System.out.println();
-                System.out.println("No tasks found.");
-                System.out.println();
+                say("No tasks found.");
                 return;
             }
 
@@ -687,9 +726,7 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error listing tasks: " + e.getMessage());
-            System.out.println();
+            say("Error listing tasks: " + e.getMessage());
         }
     }
 
@@ -701,6 +738,7 @@ public class App implements ApplicationRunner {
             case "RUNNING" -> "\033[1;36m" + padded + "\033[0m";  // bold cyan
             case "STOPPED" -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
             case "PAUSED"  -> "\033[1;34m" + padded + "\033[0m";  // bold blue
+            case "CRASHED" -> "\033[1;33m" + padded + "\033[0m";  // bold yellow
             case "DELETED" -> "\033[2;37m" + padded + "\033[0m";   // dim white
             default        -> padded;
         };
@@ -776,11 +814,15 @@ public class App implements ApplicationRunner {
                 System.out.println();
                 System.out.println("Error:     " + m.getError());
             }
+
+            String actions = availableActions(m.getStatus());
+            if (!actions.isEmpty()) {
+                System.out.println();
+                System.out.println("Available actions: " + actions);
+            }
             System.out.println();
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
@@ -789,15 +831,11 @@ public class App implements ApplicationRunner {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             List<TaskManager.HistoryEntry> entries = tm.history(name);
             if (entries.isEmpty()) {
-                System.out.println();
-                System.out.println("No history found for task '" + name + "'.");
-                System.out.println();
+                say("No history found for task '" + name + "'.");
                 return;
             }
 
-            System.out.println();
-            System.out.println("Task: " + name);
-            System.out.println();
+            say("Task: " + name);
             String hdrFmt = "%4s  %-20s  %-8s  %s%n";
             String rowFmt = "%4d  %-20s  %-8s  %s%n";
             System.out.printf(hdrFmt, "#", "TIMESTAMP", "ACTION", "DETAILS");
@@ -818,9 +856,7 @@ public class App implements ApplicationRunner {
             }
             System.out.println();
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
@@ -828,23 +864,17 @@ public class App implements ApplicationRunner {
         try {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             tm.delete(name);
-            System.out.println();
-            System.out.println("Task '" + name + "' deleted.");
-            System.out.println();
+            say("Task '" + name + "' deleted.");
         } catch (TaskLockedException e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
     private static void taskClean() {
         if (System.console() == null) {
-            System.out.println("Error: clean requires interactive terminal for confirmation.");
+            sayError("clean requires interactive terminal for confirmation.");
             return;
         }
         System.out.println();
@@ -852,23 +882,17 @@ public class App implements ApplicationRunner {
         System.out.flush();
         String answer = System.console().readLine().trim().toLowerCase();
         if (!"y".equals(answer) && !"yes".equals(answer)) {
-            System.out.println("Aborted.");
+            say("Aborted.");
             return;
         }
         try {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             tm.cleanAll();
-            System.out.println();
-            System.out.println("All tasks and history cleared.");
-            System.out.println();
+            say("All tasks and history cleared.");
         } catch (TaskLockedException e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
@@ -877,23 +901,18 @@ public class App implements ApplicationRunner {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             TaskMeta meta = tm.status(name);
             if (!"RUNNING".equals(meta.getStatus()) && !"PAUSED".equals(meta.getStatus())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' cannot be stopped (status: " + meta.getStatus() + ").");
-                System.out.println();
+                say("Task '" + name + "' cannot be stopped (status: " + meta.getStatus() + ").");
                 return;
             }
             if (!"sync".equals(meta.getMode())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be stopped.");
-                System.out.println();
+                say("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be stopped.");
                 return;
             }
             System.out.println();
             System.out.print("Stop task '" + name + "'? [y/N] ");
             String confirm = System.console().readLine();
             if (confirm == null || !confirm.trim().equalsIgnoreCase("y")) {
-                System.out.println("Cancelled.");
-                System.out.println();
+                say("Cancelled.");
                 return;
             }
             tm.stop(name);
@@ -927,13 +946,9 @@ public class App implements ApplicationRunner {
                     // Lock still held → process still running
                 }
             }
-            System.out.println();
-            System.out.println("Task '" + name + "' " + status + ".");
-            System.out.println();
+            say("Task '" + name + "' " + status + ".");
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
@@ -942,23 +957,18 @@ public class App implements ApplicationRunner {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             TaskMeta meta = tm.status(name);
             if (!"RUNNING".equals(meta.getStatus())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' is not running (status: " + meta.getStatus() + ").");
-                System.out.println();
+                say("Task '" + name + "' is not running (status: " + meta.getStatus() + ").");
                 return;
             }
             if (!"sync".equals(meta.getMode())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be paused.");
-                System.out.println();
+                say("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be paused.");
                 return;
             }
             System.out.println();
             System.out.print("Pause task '" + name + "'? [y/N] ");
             String confirm = System.console().readLine();
             if (confirm == null || !confirm.trim().equalsIgnoreCase("y")) {
-                System.out.println("Cancelled.");
-                System.out.println();
+                say("Cancelled.");
                 return;
             }
             tm.pause(name);
@@ -976,13 +986,9 @@ public class App implements ApplicationRunner {
                     break;
                 }
             }
-            System.out.println();
-            System.out.println("Task '" + name + "' paused.");
-            System.out.println();
+            say("Task '" + name + "' paused.");
         } catch (Exception e) {
-            System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            sayError(e.getMessage());
         }
     }
 
@@ -991,23 +997,18 @@ public class App implements ApplicationRunner {
             TaskManager tm = new TaskManager(Path.of("tasks"));
             TaskMeta meta = tm.status(name);
             if (!"PAUSED".equals(meta.getStatus())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' is not paused (status: " + meta.getStatus() + ").");
-                System.out.println();
+                say("Task '" + name + "' is not paused (status: " + meta.getStatus() + ").");
                 return;
             }
             if (!"sync".equals(meta.getMode())) {
-                System.out.println();
-                System.out.println("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be resumed.");
-                System.out.println();
+                say("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be resumed.");
                 return;
             }
             System.out.println();
             System.out.print("Resume task '" + name + "'? [y/N] ");
             String confirm = System.console().readLine();
             if (confirm == null || !confirm.trim().equalsIgnoreCase("y")) {
-                System.out.println("Cancelled.");
-                System.out.println();
+                say("Cancelled.");
                 return;
             }
             tm.resume(name);
@@ -1025,13 +1026,47 @@ public class App implements ApplicationRunner {
                     break;
                 }
             }
-            System.out.println();
-            System.out.println("Task '" + name + "' resumed.");
-            System.out.println();
+            say("Task '" + name + "' resumed.");
         } catch (Exception e) {
+            sayError(e.getMessage());
+        }
+    }
+
+    private static void taskRestart(String name) {
+        try {
+            TaskManager tm = new TaskManager(Path.of("tasks"));
+            TaskMeta meta = tm.status(name);
+
+            if (!"CRASHED".equals(meta.getStatus())) {
+                say("Task '" + name + "' is not crashed (status: " + meta.getStatus() + ").");
+                return;
+            }
+            if (!"sync".equals(meta.getMode())) {
+                say("Task '" + name + "' is mode=" + meta.getMode() + ". Only sync tasks can be restarted.");
+                return;
+            }
+
+            List<String> storedArgs = meta.getArgs();
+            if (storedArgs == null || storedArgs.isEmpty()) {
+                say("Task '" + name + "' has no stored command-line args. Cannot restart.");
+                return;
+            }
+
             System.out.println();
-            System.out.println("Error: " + e.getMessage());
-            System.out.println();
+            System.out.print("Restart task '" + name + "'? [y/N] ");
+            System.out.flush();
+            String confirm = System.console().readLine();
+            if (confirm == null || !confirm.trim().equalsIgnoreCase("y")) {
+                say("Cancelled.");
+                return;
+            }
+
+            System.out.println("Restarting with args: " + String.join(" ", storedArgs));
+
+            long pid = launchChildProcess(storedArgs);
+            say("Task '" + name + "' restarted in background (PID: " + pid + ")\nUse 'any2tidb task list' to check status.");
+        } catch (Exception e) {
+            sayError(e.getMessage());
         }
     }
 
