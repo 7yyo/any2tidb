@@ -456,7 +456,7 @@ public class SnapshotStep implements MigrationStep {
             String offsetPath = snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset";
             com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, dbName, debeziumLsn);
             Log.info(log, "offset written for empty database", "db", dbName,
-                    "path", offsetPath, "lsn", debeziumLsn);
+                    "lsn", debeziumLsn);
         } catch (Exception e) {
             Log.warn(log, "failed to write offset for empty database, sync cannot resume",
                     "db", dbName, "error", e.getMessage());
