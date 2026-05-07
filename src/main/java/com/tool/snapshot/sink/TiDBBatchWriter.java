@@ -19,6 +19,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class TiDBBatchWriter {
@@ -26,6 +28,7 @@ public class TiDBBatchWriter {
     private final DataSource dataSource;
     private final SinkRecordConverter converter;
     private final int batchSize;
+    private final String dbName;
     private static final Logger log = LoggerFactory.getLogger(TiDBBatchWriter.class);
     private final ExecutorService flushExecutor;
 
@@ -58,11 +61,17 @@ public class TiDBBatchWriter {
     private static final int FLUSH_PURGE_INTERVAL = 128;
 
     public TiDBBatchWriter(DataSource dataSource, SinkRecordConverter converter, int batchSize,
-                           int writerThreads) {
+                           int writerThreads, String dbName) {
         this.dataSource = dataSource;
         this.converter = converter;
         this.batchSize = batchSize;
-        this.flushExecutor = Executors.newFixedThreadPool(writerThreads);
+        this.dbName = dbName;
+        AtomicInteger n = new AtomicInteger(1);
+        this.flushExecutor = Executors.newFixedThreadPool(writerThreads, r -> {
+            Thread t = new Thread(r, "flush-" + n.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public void setTableEstimates(Map<String, Long> estimates) {
@@ -77,9 +86,6 @@ public class TiDBBatchWriter {
 
         totalRows.incrementAndGet();
         if (firstRow) {
-            Long est = tableEstimates.get(table);
-            Log.info(log, "table started", "db", dbName, "table", table,
-                    "estimatedRows", est != null ? est : -1);
             tableLastLogMs.put(table, System.currentTimeMillis());
         }
         tableRowCounts.merge(table, 1L, Long::sum);
@@ -198,9 +204,9 @@ public class TiDBBatchWriter {
             }
             long elapsed = System.currentTimeMillis() - waitStartMs;
             if (nowRemaining > 0 && System.currentTimeMillis() - lastLogMs >= 30_000) {
-                Log.info(log, "flush progress",
-                        "batches", nowRemaining,
-                        "rows", "~" + (nowRemaining * batchSize),
+                Log.info(log, "flushing",
+                        "db", dbName,
+                        "remaining", nowRemaining + " batches, ~" + formatRows(nowRemaining * batchSize) + " rows",
                         "elapsed", formatDuration(elapsed));
                 lastLogMs = System.currentTimeMillis();
             }
@@ -211,7 +217,8 @@ public class TiDBBatchWriter {
         flushExecutor.awaitTermination(1, TimeUnit.MINUTES);
         long tAfterTerm = System.currentTimeMillis();
         if (totalFutures > 0) {
-            Log.info(log, "flushAll breakdown", "pendingBatches", pendingBatches,
+            Log.info(log, "flushAll breakdown", "db", dbName,
+                    "pendingBatches", pendingBatches,
                     "totalFutures", totalFutures,
                     "drainMs", tAfterDrain - tDrain,
                     "waitMs", tAfterWait - tAfterDrain,
