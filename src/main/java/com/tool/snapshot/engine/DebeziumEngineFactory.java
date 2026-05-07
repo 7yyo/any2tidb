@@ -4,25 +4,28 @@ import com.tool.config.AppConfig;
 import com.tool.logging.Log;
 import com.tool.snapshot.SnapshotConfig;
 import com.tool.snapshot.sink.SnapshotSink;
+import com.tool.source.SourceDriver;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import io.debezium.engine.format.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class DebeziumEngineFactory {
 
     private static final Logger log = LoggerFactory.getLogger(DebeziumEngineFactory.class);
 
     private final AppConfig.DbConfig source;
-    private final String connectorClass;
+    private final SourceDriver driver;
 
-    public DebeziumEngineFactory(AppConfig.DbConfig source, String connectorClass) {
+    public DebeziumEngineFactory(AppConfig.DbConfig source, SourceDriver driver) {
         this.source = source;
-        this.connectorClass = connectorClass;
+        this.driver = driver;
     }
 
     public DebeziumEngine<ChangeEvent<String, String>> create(
@@ -30,19 +33,20 @@ public class DebeziumEngineFactory {
             SnapshotConfig snapshotConfig,
             List<String[]> tableFilter,
             SnapshotSink sink,
-            Runnable onComplete) {
+            String taskName,
+            Runnable onComplete,
+            AtomicLong closeStartMs) {
 
         Properties props = new Properties();
-        props.setProperty("name", "any2tidb-snapshot-" + dbName);
-        props.setProperty("connector.class", connectorClass);
+        props.setProperty("name", driver.type() + "2tidb-" + dbName);
+        props.setProperty("connector.class", driver.debeziumConnectorClass());
         props.setProperty("database.hostname", source.getHost());
         props.setProperty("database.port", String.valueOf(source.getPort()));
         props.setProperty("database.user", source.getUsername());
         props.setProperty("database.password", source.getPassword());
-        props.setProperty("database.names", dbName);
+        props.setProperty(driver.debeziumDatabaseProperty(), dbName);
         props.setProperty("topic.prefix", "any2tidb_" + dbName);
-        props.setProperty("database.encrypt", "true");
-        props.setProperty("database.trustServerCertificate", "true");
+        driver.configureDebeziumProperties(props);
         props.setProperty("schema.history.internal",
                 "io.debezium.storage.file.history.FileSchemaHistory");
         props.setProperty("schema.history.internal.file.filename",
@@ -67,18 +71,31 @@ public class DebeziumEngineFactory {
         Log.info(log, "creating debezium engine",
                 "database", dbName,
                 "snapshotMode", snapshotConfig.snapshotMode(),
-                "tables", snapshotConfig.buildTableIncludeList(tableFilter));
+                "tables", tableFilter.size());
 
         return DebeziumEngine.create(Json.class)
                 .using(props)
-                .notifying(event -> sink.accept(List.of(event)))
-                .using((DebeziumEngine.CompletionCallback) (success, message, error) -> {
-                    if (error != null) {
-                        Log.error(log, "engine failed", "database", dbName, "error", error.getMessage());
-                    } else {
-                        Log.info(log, "engine completed", "database", dbName, "message", message);
+                .notifying(event -> {
+                    MDC.put("task", taskName);
+                    try {
+                        sink.accept(List.of(event));
+                    } finally {
+                        MDC.remove("task");
                     }
-                    if (onComplete != null) onComplete.run();
+                })
+                .using((DebeziumEngine.CompletionCallback) (success, message, error) -> {
+                    MDC.put("task", taskName);
+                    try {
+                        if (error != null) {
+                            Log.error(log, "engine failed", "database", dbName, "error", error.getMessage());
+                        } else {
+                            long closeMs = closeStartMs != null ? System.currentTimeMillis() - closeStartMs.get() : -1;
+                            Log.info(log, "engine closed", "database", dbName, "closeMs", closeMs);
+                        }
+                        if (onComplete != null) onComplete.run();
+                    } finally {
+                        MDC.remove("task");
+                    }
                 })
                 .build();
     }

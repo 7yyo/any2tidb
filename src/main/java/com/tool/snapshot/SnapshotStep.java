@@ -28,14 +28,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class SnapshotStep implements MigrationStep {
@@ -67,7 +71,6 @@ public class SnapshotStep implements MigrationStep {
         Integer maxQueueSize = ctx.get("maxQueueSize", Integer.class);
         Integer pollIntervalMs = ctx.get("pollIntervalMs", Integer.class);
         Integer offsetCommitIntervalMs = ctx.get("offsetCommitIntervalMs", Integer.class);
-        Double snapshotMaxThreadsMultiplier = ctx.get("snapshotMaxThreadsMultiplier", Double.class);
         String offsetStoragePath = ctx.get("offsetStoragePath", String.class);
         String schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
 
@@ -80,8 +83,6 @@ public class SnapshotStep implements MigrationStep {
         if (maxQueueSize != null) snapshotConfig = snapshotConfig.withMaxQueueSize(maxQueueSize);
         if (pollIntervalMs != null) snapshotConfig = snapshotConfig.withPollIntervalMs(pollIntervalMs);
         if (offsetCommitIntervalMs != null) snapshotConfig = snapshotConfig.withOffsetCommitIntervalMs(offsetCommitIntervalMs);
-        if (snapshotMaxThreadsMultiplier != null) snapshotConfig = snapshotConfig.withSnapshotMaxThreadsMultiplier(snapshotMaxThreadsMultiplier);
-
         new File(snapshotConfig.offsetStoragePath()).mkdirs();
         new File(snapshotConfig.schemaHistoryPath()).mkdirs();
 
@@ -94,7 +95,7 @@ public class SnapshotStep implements MigrationStep {
         } catch (Exception e) {
             return StepResult.fatal("Cannot connect to source database: " + e.getMessage());
         }
-        Log.info(log, "database discovery", "count", dbNames.size(), "databases", dbNames);
+        Log.info(log, "database discovery", "count", dbNames.size());
 
         int totalDbs = dbNames.size();
         dbNames = FilterUtils.filterNames(dbNames, databases);
@@ -140,21 +141,67 @@ public class SnapshotStep implements MigrationStep {
         }
 
         CdcProvider cdcChecker = sourceDriver.cdcProvider();
-        List<SnapshotDbResult> dbResults = new ArrayList<>();
-        long totalRows = 0L;
+        String taskName = ctx.get("taskName", String.class);
+        Integer dbThreadsObj = ctx.get("snapshotDbThreads", Integer.class);
+        int dbThreads = (dbThreadsObj != null && dbThreadsObj > 1) ? dbThreadsObj : 1;
+        final SnapshotConfig finalSnapshotConfig = snapshotConfig;
+
+        List<SnapshotDbResult> dbResults;
+        long totalRows;
         long startMs = System.currentTimeMillis();
 
-        String taskName = ctx.get("taskName", String.class);
-        for (String dbName : dbNames) {
-            long dbStartMs = System.currentTimeMillis();
-            SnapshotDbResult dbResult = snapshotDatabase(
-                    dbName, tables, cdcChecker, snapshotConfig, taskName);
-            dbResults.add(dbResult);
-            if (!dbResult.isError()) {
-                totalRows += dbResult.rows();
+        if (dbThreads <= 1) {
+            // Serial path — unchanged
+            dbResults = new ArrayList<>();
+            totalRows = 0L;
+            for (String dbName : dbNames) {
+                long dbStartMs = System.currentTimeMillis();
+                SnapshotDbResult dbResult = snapshotDatabase(
+                        dbName, tables, cdcChecker, finalSnapshotConfig, taskName);
+                dbResults.add(dbResult);
+                if (!dbResult.isError()) {
+                    totalRows += dbResult.rows();
+                }
+                long dbMs = System.currentTimeMillis() - dbStartMs;
+                printDbResult(dbName, dbResult, dbMs);
             }
-            long dbMs = System.currentTimeMillis() - dbStartMs;
-            printDbResult(dbName, dbResult, dbMs);
+        } else {
+            // Concurrent path — one thread per database
+            ConcurrentLinkedQueue<SnapshotDbResult> results = new ConcurrentLinkedQueue<>();
+            AtomicLong rows = new AtomicLong(0L);
+            ExecutorService pool = Executors.newFixedThreadPool(dbThreads, r -> {
+                Thread t = new Thread(r, "snapshot-db-worker");
+                t.setDaemon(true);
+                return t;
+            });
+            List<Callable<Void>> tasks = new ArrayList<>();
+            for (String dbName : dbNames) {
+                tasks.add(() -> {
+                    MDC.put("task", taskName);
+                    try {
+                        long dbStartMs = System.currentTimeMillis();
+                        SnapshotDbResult dbResult = snapshotDatabase(
+                                dbName, tables, cdcChecker, finalSnapshotConfig, taskName);
+                        results.add(dbResult);
+                        if (!dbResult.isError()) {
+                            rows.addAndGet(dbResult.rows());
+                        }
+                        long dbMs = System.currentTimeMillis() - dbStartMs;
+                        printDbResult(dbName, dbResult, dbMs);
+                    } finally {
+                        MDC.remove("task");
+                    }
+                    return null;
+                });
+            }
+            try {
+                pool.invokeAll(tasks);
+            } finally {
+                pool.shutdown();
+                pool.awaitTermination(5, TimeUnit.MINUTES);
+            }
+            dbResults = new ArrayList<>(results);
+            totalRows = rows.get();
         }
 
         long totalMs = System.currentTimeMillis() - startMs;
@@ -173,7 +220,7 @@ public class SnapshotStep implements MigrationStep {
 
     private StepResult checkTargetTablesEmpty(List<String> dbNames, List<String> tables,
                                                AppConfig config) {
-        List<String> errors = new ArrayList<>();
+        List<String[]> errors = new ArrayList<>();
         for (String dbName : dbNames) {
             try (Connection srcConn = DriverManager.getConnection(
                     sourceDriver.buildJdbcUrlTo(config.getSource(), dbName),
@@ -192,13 +239,13 @@ public class SnapshotStep implements MigrationStep {
                              java.sql.ResultSet rs = st.executeQuery(
                                      "SELECT 1 FROM `" + escapeBacktick(dbName) + "`.`" + escapeBacktick(tableName) + "` LIMIT 1")) {
                             if (rs.next()) {
-                                errors.add(full + " — not empty");
+                                errors.add(new String[]{full, "not empty"});
                             }
                         } catch (java.sql.SQLException e) {
                             if ("42S02".equals(e.getSQLState())) {
-                                errors.add(full + " — table does not exist in TiDB (run schema first)");
+                                errors.add(new String[]{full, "table does not exist in TiDB (run schema first)"});
                             } else {
-                                errors.add(full + " — " + e.getMessage());
+                                errors.add(new String[]{full, e.getMessage()});
                             }
                         }
                     }
@@ -209,8 +256,8 @@ public class SnapshotStep implements MigrationStep {
         }
         if (!errors.isEmpty()) {
             Log.error(log, "Target TiDB pre-check failed", "count", errors.size());
-            for (String err : errors) {
-                Log.error(log, "target table not ready", "reason", err);
+            for (String[] err : errors) {
+                Log.error(log, "target table not ready", "table", err[0], "error", err[1]);
             }
             return StepResult.fatal("target tables not empty or missing — run schema first, or clean target");
         }
@@ -239,23 +286,45 @@ public class SnapshotStep implements MigrationStep {
 
             TiDBBatchWriter batchWriter = new TiDBBatchWriter(
                     targetDs, new SinkRecordConverter(targetDs), snapshotConfig.batchInsertSize(),
-                    snapshotConfig.snapshotMaxThreads());
+                    snapshotConfig.snapshotMaxThreads(), dbName);
             Map<String, Long> estimates = sourceDriver.schemaExtractor().estimateRowCounts(conn, tableList);
             batchWriter.setTableEstimates(estimates);
-            Log.info(log, "row estimates", "database", dbName, "estimates", estimates.toString());
+            Log.info(log, "snapshot starting", "database", dbName,
+                    "tables", tableList.size(), "totalRows",
+                    estimates.values().stream().mapToLong(v -> v).sum());
+            for (int i = 0; i < tableList.size(); i++) {
+                String[] t = tableList.get(i);
+                String fullName = t[0] + "." + t[1];
+                String prefix = (i == tableList.size() - 1) ? "  └─ " : "  ├─ ";
+                Log.info(log, prefix + fullName, "rows", estimates.getOrDefault(t[1], 0L));
+            }
+
             SnapshotSink sink = new SnapshotSink(batchWriter);
+
+            // If every table is empty, skip Debezium engine entirely.
+            // Debezium SQL Server connector hangs on all-empty databases (no completion signal).
+            if (allTablesEmpty(conn, tableList, sourceDriver.type())) {
+                Log.info(log, "all tables empty, skipping debezium engine", "database", dbName);
+                writeEmptyDbOffsets(dbName, snapshotConfig);
+                return new SnapshotDbResult(dbName, tableList.size(), 0L, Instant.now(), null);
+            }
 
             DebeziumEngineFactory factory = new DebeziumEngineFactory(
                     config.getSource(), sourceDriver);
-            Log.info(log, "snapshot starting", "database", dbName, "tables", tableList.size());
 
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> engineError = new AtomicReference<>();
+            AtomicLong closeStartMs = new AtomicLong();
 
             DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
-                    dbName, snapshotConfig, tableList, sink, taskName, done::countDown);
+                    dbName, snapshotConfig, tableList, sink, taskName, done::countDown,
+                    closeStartMs);
 
-            ExecutorService executor = Executors.newSingleThreadExecutor();
+            ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "engine-" + dbName);
+                t.setDaemon(true);
+                return t;
+            });
             long finalRows = 0L;
             try {
                 executor.submit(() -> {
@@ -269,18 +338,13 @@ public class SnapshotStep implements MigrationStep {
                         MDC.remove("task");
                     }
                 });
-                // ORDERED guarantees "snapshot=last" arrives after all data.
-                // Poll isSnapshotComplete() — reliable signal, no idle timeout needed.
                 long startMs = System.currentTimeMillis();
                 while (!done.await(2, TimeUnit.SECONDS)) {
                     if (sink.isSnapshotComplete()) {
                         long rows = batchWriter.getTotalRows();
                         Log.info(log, "snapshot finished", "database", dbName, "rows", rows);
-                        long tClose = System.currentTimeMillis();
+                        closeStartMs.set(System.currentTimeMillis());
                         engine.close();
-                        Log.info(log, "engine.close() done", "database", dbName, "ms", System.currentTimeMillis() - tClose);
-                        // close() signals stop but run() may still be flushing.
-                        // Wait for runner thread to finish before executor shutdown.
                         if (!done.await(30, TimeUnit.SECONDS)) {
                             Log.warn(log, "engine.run() did not return within 30s after close",
                                     "database", dbName);
@@ -357,6 +421,57 @@ public class SnapshotStep implements MigrationStep {
         }
     }
 
+    /**
+     * Check whether every table in the list has zero rows.
+     * Used to skip Debezium engine for all-empty databases (known Debezium 3.5 hang).
+     */
+    private static boolean allTablesEmpty(Connection conn, List<String[]> tableList, String sourceType) {
+        boolean sqlserver = "sqlserver".equals(sourceType);
+        for (String[] entry : tableList) {
+            String schema = entry[0];
+            String table = entry[1];
+            String sql = sqlserver
+                    ? "SELECT TOP 1 1 FROM [" + schema + "].[" + table + "]"
+                    : "SELECT 1 FROM `" + schema + "`.`" + table + "` LIMIT 1";
+            try (Statement st = conn.createStatement();
+                 var rs = st.executeQuery(sql)) {
+                if (rs.next()) return false; // at least one row found
+            } catch (Exception ignored) {
+                // If the query fails, assume non-empty to stay safe
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Write offset file for an empty database so sync can resume CDC from here.
+     * Schema history is not written — SyncStep.ensureSchemaHistory() handles it.
+     */
+    private void writeEmptyDbOffsets(String dbName, SnapshotConfig snapshotConfig) {
+        try {
+            String hexLsn = sourceDriver.captureCdcStartPoint(dbName);
+            if (hexLsn == null) {
+                Log.warn(log, "no LSN captured for empty database, sync cannot resume from this point",
+                        "database", dbName);
+                return;
+            }
+            String debeziumLsn = com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium(hexLsn);
+            String offsetPath = snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset";
+            com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, dbName, debeziumLsn);
+            Log.info(log, "offset written for empty database", "database", dbName,
+                    "path", offsetPath, "lsn", debeziumLsn);
+        } catch (Exception e) {
+            Log.warn(log, "failed to write offset for empty database, sync cannot resume",
+                    "database", dbName, "error", e.getMessage());
+        }
+    }
+
+    /**
+     * Force ALL relevant loggers to DEBUG/TRACE so engine.run() internals are visible.
+     * Covers Debezium (SLF4J/Logback), SQL Server JDBC driver (JUL), and HikariCP.
+     * Returns a diagnostic string.
+     */
     private void printDbResult(String dbName, SnapshotDbResult r, long elapsedMs) {
         if (r.isError()) {
             Log.error(log, "database snapshot failed", "database", dbName, "error", r.error());
