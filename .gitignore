@@ -1,6 +1,25 @@
+# Maven
 target/
+
+# npm
+any2tidb-web/node_modules/
+any2tidb-web/dist/
+
+# Build artifacts
+dist/any2tidb-1.0.0.jar
+
+# macOS
+.DS_Store
+
+# IDE / Editor
+.claude/settings.local.json
+.superpowers/
+
+# Runtime data
+snapshot-offsets/
+tasks/
+tmp/
 *.log
-dist/dump-output/
-dist/snapshot-offsets/
-dist/snapshot-schema-history/
+
+# Misc
 snapshot-meta.json
