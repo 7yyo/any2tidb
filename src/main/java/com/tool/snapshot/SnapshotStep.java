@@ -373,8 +373,8 @@ public class SnapshotStep implements MigrationStep {
                         "pendingRows", batchWriter.getPendingWrites());
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
-                Log.info(log, "snapshot shutdown", "db", dbName,
-                        "executorShutdownMs", t1 - t0, "flushMs", t2 - t1);
+                Log.info(log, "snapshot finished, flushed", "database", dbName,
+                        "flushMs", t2 - t1);
             }
 
             return new SnapshotDbResult(dbName, tableList.size(),
