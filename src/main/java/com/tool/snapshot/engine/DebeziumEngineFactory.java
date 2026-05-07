@@ -14,7 +14,6 @@ import org.slf4j.MDC;
 
 import java.util.List;
 import java.util.Properties;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class DebeziumEngineFactory {
 
@@ -34,8 +33,7 @@ public class DebeziumEngineFactory {
             List<String[]> tableFilter,
             SnapshotSink sink,
             String taskName,
-            Runnable onComplete,
-            AtomicLong closeStartMs) {
+            Runnable onComplete) {
 
         Properties props = new Properties();
         props.setProperty("name", driver.type() + "2tidb-" + dbName);
@@ -88,9 +86,6 @@ public class DebeziumEngineFactory {
                     try {
                         if (error != null) {
                             Log.error(log, "engine failed", "database", dbName, "error", error.getMessage());
-                        } else {
-                            long closeMs = closeStartMs != null ? System.currentTimeMillis() - closeStartMs.get() : -1;
-                            Log.info(log, "engine closed", "database", dbName, "closeMs", closeMs);
                         }
                         if (onComplete != null) onComplete.run();
                     } finally {

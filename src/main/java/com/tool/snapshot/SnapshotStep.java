@@ -314,11 +314,9 @@ public class SnapshotStep implements MigrationStep {
 
             CountDownLatch done = new CountDownLatch(1);
             AtomicReference<Throwable> engineError = new AtomicReference<>();
-            AtomicLong closeStartMs = new AtomicLong();
 
             DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
-                    dbName, snapshotConfig, tableList, sink, taskName, done::countDown,
-                    closeStartMs);
+                    dbName, snapshotConfig, tableList, sink, taskName, done::countDown);
 
             ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "engine-" + dbName);
@@ -343,7 +341,6 @@ public class SnapshotStep implements MigrationStep {
                     if (sink.isSnapshotComplete()) {
                         long rows = batchWriter.getTotalRows();
                         Log.info(log, "snapshot finished", "database", dbName, "rows", rows);
-                        closeStartMs.set(System.currentTimeMillis());
                         engine.close();
                         if (!done.await(30, TimeUnit.SECONDS)) {
                             Log.warn(log, "engine.run() did not return within 30s after close",
