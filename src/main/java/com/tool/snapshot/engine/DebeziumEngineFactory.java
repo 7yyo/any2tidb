@@ -67,7 +67,7 @@ public class DebeziumEngineFactory {
         // No need for idle-timeout polling or manual engine.close().
 
         Log.info(log, "creating debezium engine",
-                "database", dbName,
+                "db", dbName,
                 "snapshotMode", snapshotConfig.snapshotMode(),
                 "tables", tableFilter.size());
 
@@ -85,7 +85,7 @@ public class DebeziumEngineFactory {
                     MDC.put("task", taskName);
                     try {
                         if (error != null) {
-                            Log.error(log, "engine failed", "database", dbName, "error", error.getMessage());
+                            Log.error(log, "engine failed", "db", dbName, "error", error.getMessage());
                         }
                         if (onComplete != null) onComplete.run();
                     } finally {

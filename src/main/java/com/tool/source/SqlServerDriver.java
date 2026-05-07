@@ -2,15 +2,22 @@ package com.tool.source;
 
 import com.tool.config.AppConfig;
 import com.tool.dump.extractor.DumpExtractor;
+import com.tool.logging.Log;
 import com.tool.schema.converter.TypeMapper;
 import com.tool.schema.extractor.SchemaExtractor;
 import com.tool.schema.verifier.SchemaVerifier;
+import com.tool.source.sqlserver.SqlServerCdcUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Properties;
 import java.util.Set;
 
 @Component
 public class SqlServerDriver implements SourceDriver {
+
+    private static final Logger log = LoggerFactory.getLogger(SqlServerDriver.class);
 
     private final SchemaExtractor schemaExtractor;
     private final DumpExtractor dumpExtractor;
@@ -18,12 +25,14 @@ public class SqlServerDriver implements SourceDriver {
     private final SchemaVerifier verifier;
     private final ConsistencyProvider consistencyProvider;
     private final CdcProvider cdcProvider;
+    private final AppConfig config;
 
     public SqlServerDriver(SchemaExtractor schemaExtractor,
                            DumpExtractor dumpExtractor,
                            TypeMapper typeMapper,
                            SchemaVerifier verifier,
                            AppConfig config) {
+        this.config = config;
         this.schemaExtractor = schemaExtractor;
         this.dumpExtractor = dumpExtractor;
         this.typeMapper = typeMapper;
@@ -77,5 +86,26 @@ public class SqlServerDriver implements SourceDriver {
     @Override
     public String debeziumConnectorClass() {
         return "io.debezium.connector.sqlserver.SqlServerConnector";
+    }
+
+    @Override
+    public String captureCdcStartPoint(String dbName) {
+        try {
+            return SqlServerCdcUtils.captureLsn(
+                    config.getSource().getHost(),
+                    config.getSource().getPort(),
+                    config.getSource().getUsername(),
+                    config.getSource().getPassword(),
+                    dbName);
+        } catch (Exception e) {
+            Log.warn(log, "Failed to capture CDC start LSN", "db", dbName, "error", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public void configureDebeziumProperties(Properties props) {
+        props.setProperty("database.encrypt", "true");
+        props.setProperty("database.trustServerCertificate", "true");
     }
 }

@@ -6,6 +6,7 @@ import com.tool.config.AppConfig;
 import com.tool.logging.Log;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import com.tool.pipeline.MigrationStep;
 import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
@@ -72,7 +73,7 @@ public class SyncStep implements MigrationStep {
             dbResults = readSnapshotMetaFile(cfg.metaFile());
         }
         if (dbResults.isEmpty()) {
-            return StepResult.fatal("No snapshot results found. Run snapshot first, or provide --meta-file.");
+            return StepResult.fatal("No snapshot results found. Run snapshot first, then point sync to it with --from-task.");
         }
 
         // 2. Filter out failed databases
@@ -90,7 +91,7 @@ public class SyncStep implements MigrationStep {
             OffsetInfo info = readOffsetInfo(offsetPath, db.dbName());
             if (info == null || !info.snapshotCompleted) {
                 Log.error(log, "offset not ready for sync",
-                        "database", db.dbName(),
+                        "db", db.dbName(),
                         "offsetPath", offsetPath,
                         "found", info != null,
                         "snapshotCompleted", info != null ? info.snapshotCompleted : false);
@@ -99,12 +100,12 @@ public class SyncStep implements MigrationStep {
                 // Also verify LSN is still within CDC retention window
                 if (info.commitLsn != null && !lsnInCdcWindow(db.dbName(), info.commitLsn)) {
                     Log.error(log, "offset LSN outside CDC retention window",
-                            "database", db.dbName(),
+                            "db", db.dbName(),
                             "commitLsn", info.commitLsn);
                     allOffsetsOk = false;
                 } else {
                     Log.info(log, "sync database",
-                            "database", db.dbName(),
+                            "db", db.dbName(),
                             "tables", db.tables(),
                             "snapshotRows", db.rows(),
                             "snapshotLsn", info.commitLsn != null ? info.commitLsn : "?",
@@ -117,22 +118,23 @@ public class SyncStep implements MigrationStep {
                     "Offset files not ready. Run snapshot first to generate them, then sync will resume from the snapshot point.");
         }
 
+        TaskManager taskManager = ctx.get("taskManager", TaskManager.class);
+        String taskName = ctx.get("taskName", String.class);
+
         // 3b. Ensure schema history exists for each database. If a DB has an
         // offset but no schema history (e.g. after a dump), run a quick
-        // schema_only snapshot to capture the table schemas, then restore the
+        // no_data snapshot to capture the table schemas, then restore the
         // dump's LSN so CDC starts from the pre-dump point.
-        ensureSchemaHistory(okDbs, cfg);
+        ensureSchemaHistory(okDbs, cfg, taskName);
 
         // 4. Create writer and converter shared across all DB engines
         SinkRecordConverter converter = new SinkRecordConverter(targetDs);
         SyncWriter writer = new SyncWriter(converter);
         SyncEngineFactory engineFactory = new SyncEngineFactory(
-                config.getSource(), sourceDriver.debeziumConnectorClass());
+                config.getSource(), sourceDriver);
 
         // 5. Sync loop — supports pause/resume/stop without process restart
         int dbCount = okDbs.size();
-        TaskManager taskManager = ctx.get("taskManager", TaskManager.class);
-        String taskName = ctx.get("taskName", String.class);
         ConcurrentHashMap<String, Throwable> engineErrors = new ConcurrentHashMap<>();
         AtomicBoolean shuttingDown = new AtomicBoolean(false);
         boolean stoppedByUser = false;
@@ -145,15 +147,16 @@ public class SyncStep implements MigrationStep {
 
             for (SnapshotDbResult db : okDbs) {
                 executor.submit(() -> {
+                    MDC.put("task", taskName);
                     try {
                         SyncSink sink = new SyncSink(writer, targetDs, "any2tidb_" + db.dbName());
 
                         DebeziumEngine<ChangeEvent<String, String>> engine = engineFactory.create(
-                                db.dbName(), cfg, sink, error -> {
+                                db.dbName(), cfg, sink, taskName, error -> {
                                     if (error != null) {
                                         engineErrors.put(db.dbName(), error);
                                         Log.error(log, "sync engine error",
-                                                "database", db.dbName(), "error", error.getMessage());
+                                                "db", db.dbName(), "error", error.getMessage());
                                     }
                                     allDone.countDown();
                                 });
@@ -162,8 +165,10 @@ public class SyncStep implements MigrationStep {
                         engine.run();
                     } catch (Exception e) {
                         engineErrors.put(db.dbName(), e);
-                        Log.error(log, "sync engine error", "database", db.dbName(), "error", e.getMessage());
+                        Log.error(log, "sync engine error", "db", db.dbName(), "error", e.getMessage());
                         allDone.countDown();
+                    } finally {
+                        MDC.remove("task");
                     }
                 });
             }
@@ -277,27 +282,27 @@ public class SyncStep implements MigrationStep {
 
     /**
      * For databases that have an offset file but no schema history (e.g. after a
-     * dump), run a quick Debezium {@code schema_only} snapshot to capture
+     * dump), run a quick Debezium {@code no_data} snapshot to capture
      * table schemas, then restore the original offset LSN so CDC streaming starts
      * from the pre-dump point.
      */
-    private void ensureSchemaHistory(List<SnapshotDbResult> okDbs, SyncConfig cfg) {
+    private void ensureSchemaHistory(List<SnapshotDbResult> okDbs, SyncConfig cfg, String taskName) {
         SyncEngineFactory factory = new SyncEngineFactory(
-                config.getSource(), sourceDriver.debeziumConnectorClass());
+                config.getSource(), sourceDriver);
         for (SnapshotDbResult db : okDbs) {
             String historyPath = cfg.schemaHistoryPath() + "/" + db.dbName() + ".history";
-            if (new File(historyPath).exists()) continue;
+            if (isValidHistoryFile(historyPath)) continue;
 
             String offsetPath = cfg.offsetStoragePath() + "/" + db.dbName() + ".offset";
             OffsetInfo dumpOffset = readOffsetInfo(offsetPath, db.dbName());
             String dumpLsn = dumpOffset != null ? dumpOffset.commitLsn : null;
 
-            Log.info(log, "schema history not found, running schema_only",
-                    "database", db.dbName(),
+            Log.info(log, "schema history not found, running no_data",
+                    "db", db.dbName(),
                     "dumpLsn", dumpLsn != null ? dumpLsn : "?");
 
             try {
-                SyncConfig schemaCfg = cfg.withSnapshotMode("schema_only");
+                SyncConfig schemaCfg = cfg.withSnapshotMode("no_data");
                 DebeziumEngine.ChangeConsumer<ChangeEvent<String, String>> noopConsumer =
                         (records, committer) -> {
                             for (ChangeEvent<String, String> r : records) {
@@ -306,16 +311,22 @@ public class SyncStep implements MigrationStep {
                             committer.markBatchFinished();
                         };
                 DebeziumEngine<ChangeEvent<String, String>> engine = factory.create(
-                        db.dbName(), schemaCfg, noopConsumer, error -> {});
+                        db.dbName(), schemaCfg, noopConsumer, taskName, error -> {});
                 CountDownLatch done = new CountDownLatch(1);
                 AtomicReference<Throwable> engineError = new AtomicReference<>();
                 ExecutorService exec = Executors.newSingleThreadExecutor();
                 exec.submit(() -> {
+                    MDC.put("task", taskName);
                     try { engine.run(); }
                     catch (Throwable t) { engineError.set(t); }
-                    finally { done.countDown(); }
+                    finally { done.countDown(); MDC.remove("task"); }
                 });
-                done.await();
+                if (!done.await(5, TimeUnit.MINUTES)) {
+                    Log.warn(log, "no_data timeout, closing engine",
+                            "db", db.dbName());
+                    engine.close();
+                    done.await(30, TimeUnit.SECONDS);
+                }
                 exec.shutdown();
                 if (!exec.awaitTermination(30, TimeUnit.SECONDS)) {
                     exec.shutdownNow();
@@ -323,27 +334,44 @@ public class SyncStep implements MigrationStep {
                 }
 
                 if (engineError.get() != null) {
-                    Log.error(log, "schema_only failed", "database", db.dbName(),
+                    Log.error(log, "no_data failed", "db", db.dbName(),
                             "error", engineError.get().getMessage());
                     continue;
                 }
-                Log.info(log, "schema_only complete", "database", db.dbName());
+                Log.info(log, "no_data complete", "db", db.dbName());
             } catch (Exception e) {
-                Log.error(log, "schema_only failed", "database", db.dbName(),
+                Log.error(log, "no_data failed", "db", db.dbName(),
                         "error", e.getMessage());
                 continue;
             }
 
-            // Patch offset — schema_only wrote current LSN, restore dump's LSN
+            // Patch offset — no_data wrote current LSN, restore dump's LSN
             // Use patchOffsetLsn to preserve all other Debezium-written fields
             if (dumpLsn != null) {
                 try {
                     patchOffsetLsn(offsetPath, db.dbName(), dumpLsn);
                 } catch (Exception e) {
                     Log.warn(log, "failed to patch offset LSN",
-                            "database", db.dbName(), "error", e.getMessage());
+                            "db", db.dbName(), "error", e.getMessage());
                 }
             }
+        }
+    }
+
+    /**
+     * Debezium 3.x {@code FileSchemaHistory} writes JSON lines (one record per line).
+     * A corrupt file (e.g. from hard-killed process) is truncated or not valid JSON.
+     */
+    private static boolean isValidHistoryFile(String path) {
+        File file = new File(path);
+        if (!file.exists() || file.length() == 0) return false;
+        try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(file))) {
+            String firstLine = r.readLine();
+            if (firstLine == null || firstLine.isBlank()) return false;
+            new com.fasterxml.jackson.databind.ObjectMapper().readTree(firstLine);
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -406,7 +434,7 @@ public class SyncStep implements MigrationStep {
     private boolean lsnInCdcWindow(String dbName, String commitLsn) {
         if (commitLsn == null || !commitLsn.matches("[0-9A-Fa-f]{8}:[0-9A-Fa-f]{8}:[0-9A-Fa-f]{4}")) {
             Log.warn(log, "unexpected LSN format, skipping window check",
-                    "database", dbName, "commitLsn", commitLsn);
+                    "db", dbName, "commitLsn", commitLsn);
             return true; // can't validate — assume OK
         }
         String hex = commitLsn.replace(":", "");
@@ -419,7 +447,7 @@ public class SyncStep implements MigrationStep {
             return rs.next() && rs.getString("ts") != null;
         } catch (Exception e) {
             Log.warn(log, "LSN window check failed, assuming OK",
-                    "database", dbName, "error", e.getMessage());
+                    "db", dbName, "error", e.getMessage());
             return true; // can't verify — assume OK, don't block
         }
     }

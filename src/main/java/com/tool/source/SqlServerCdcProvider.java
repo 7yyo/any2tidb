@@ -47,6 +47,9 @@ public class SqlServerCdcProvider implements CdcProvider {
     @Override
     public List<String> getTablesWithoutCdc(Connection conn, String dbName,
                                              List<String[]> tables) throws Exception {
+        if (tables.isEmpty()) {
+            return List.of();
+        }
         String sql = "SELECT s.name, t.name FROM cdc.change_tables ct " +
                 "JOIN sys.tables t ON ct.source_object_id = t.object_id " +
                 "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
@@ -77,17 +80,52 @@ public class SqlServerCdcProvider implements CdcProvider {
     public void enableCdc(Connection conn, String dbName) throws Exception {
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("EXEC sys.sp_cdc_enable_db");
-            Log.info(log, "cdc enabled", "database", dbName);
+            Log.info(log, "cdc enabled", "db", dbName);
         }
     }
 
     @Override
     public void enableCdcForTable(Connection conn, String dbName, String schema, String table) throws Exception {
+        String captureName = sanitizeCaptureName(schema + "_" + table);
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
                     + "', @source_name = '" + escapeQuote(table)
-                    + "', @role_name = NULL");
-            Log.info(log, "cdc enabled for table", "database", dbName, "table", schema + "." + table);
+                    + "', @role_name = NULL, @capture_instance = '" + escapeQuote(captureName) + "'");
+            Log.info(log, "cdc enabled for table", "db", dbName, "table", schema + "." + table);
+        } catch (java.sql.SQLException e) {
+            // SQL Server error 22833: capture instance name already exists.
+            // This happens when a table was dropped and recreated, leaving an orphaned
+            // capture instance behind. Drop the orphan and retry.
+            if (e.getMessage() != null && (e.getMessage().contains("already exists")
+                    || e.getMessage().contains("已存在"))) {
+                Log.warn(log, "orphaned capture instance exists, dropping and recreating",
+                        "db", dbName, "captureInstance", captureName);
+                try (Statement stmt2 = conn.createStatement()) {
+                    stmt2.execute("EXEC sys.sp_cdc_drop_table @capture_instance = '" + escapeQuote(captureName) + "'");
+                } catch (java.sql.SQLException e2) {
+                    // If drop fails, try enable with explicit unique name as fallback
+                    Log.warn(log, "drop orphan failed, trying with explicit capture name",
+                            "db", dbName, "error", e2.getMessage());
+                    String uniqueName = sanitizeCaptureName(captureName + "_" + System.currentTimeMillis());
+                    try (Statement stmt3 = conn.createStatement()) {
+                        stmt3.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
+                                + "', @source_name = '" + escapeQuote(table)
+                                + "', @role_name = NULL, @capture_instance = '" + escapeQuote(uniqueName) + "'");
+                    }
+                    Log.info(log, "cdc enabled for table (custom name)", "db", dbName,
+                            "table", schema + "." + table, "captureInstance", uniqueName);
+                    return;
+                }
+                // Retry with default name after dropping orphan
+                try (Statement stmt4 = conn.createStatement()) {
+                    stmt4.execute("EXEC sys.sp_cdc_enable_table @source_schema = '" + escapeQuote(schema)
+                            + "', @source_name = '" + escapeQuote(table)
+                            + "', @role_name = NULL");
+                }
+                Log.info(log, "cdc enabled for table (recreated)", "db", dbName, "table", schema + "." + table);
+            } else {
+                throw e;
+            }
         }
     }
 
@@ -95,23 +133,46 @@ public class SqlServerCdcProvider implements CdcProvider {
         return s.replace("'", "''");
     }
 
+    /**
+     * Sanitize a capture instance name to only contain [a-zA-Z0-9_].
+     * SQL Server capture instance names can't include special chars like (, ), [, ], etc.
+     */
+    private static String sanitizeCaptureName(String s) {
+        return s.replaceAll("[^a-zA-Z0-9_]", "_");
+    }
+
     @Override
     public CdcCheckResult check(Connection conn, String dbName,
                                 List<String[]> tables) {
         try {
-            boolean agentRunning = isAgentRunning(conn);
-            if (!agentRunning) {
-                Log.warn(log, "SQL Server Agent is not running (not required for Debezium)");
+            try {
+                isAgentRunning(conn);
+            } catch (Exception e) {
+                throw new Exception("Agent check failed: " + e.getMessage(), e);
             }
 
-            if (!isCdcEnabled(conn, dbName)) {
-                enableCdc(conn, dbName);
+            try {
+                if (!isCdcEnabled(conn, dbName)) {
+                    enableCdc(conn, dbName);
+                }
+            } catch (Exception e) {
+                throw new Exception("CDC enable for database failed: " + e.getMessage(), e);
             }
 
-            List<String> missing = getTablesWithoutCdc(conn, dbName, tables);
+            List<String> missing;
+            try {
+                missing = getTablesWithoutCdc(conn, dbName, tables);
+            } catch (Exception e) {
+                throw new Exception("CDC table scan failed: " + e.getMessage(), e);
+            }
             for (String[] t : tables) {
                 if (missing.contains(t[0] + "." + t[1])) {
-                    enableCdcForTable(conn, dbName, t[0], t[1]);
+                    Log.info(log, "enabling CDC for table", "db", dbName, "table", t[0] + "." + t[1]);
+                    try {
+                        enableCdcForTable(conn, dbName, t[0], t[1]);
+                    } catch (Exception e) {
+                        throw new Exception("CDC check failed for " + t[0] + "." + t[1] + ": " + e.getMessage(), e);
+                    }
                 }
             }
 

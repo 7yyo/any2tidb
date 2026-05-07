@@ -148,7 +148,7 @@ public final class SqlServerCdcUtils {
                 map.put(entry.getKey(), newValue);
             }
 
-            Log.info(log, "offset LSN patched", "database", dbName, "old", oldLsn, "new", newDebeziumLsn);
+            Log.info(log, "offset LSN patched", "db", dbName, "old", oldLsn, "new", newDebeziumLsn);
             patched = true;
             break;
         }

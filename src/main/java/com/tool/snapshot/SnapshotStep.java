@@ -276,7 +276,7 @@ public class SnapshotStep implements MigrationStep {
             List<String[]> tableList = sourceDriver.schemaExtractor().listTables(conn, tables);
             if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
                 Log.warn(log, "--tables filter matched nothing, check spelling",
-                        "database", dbName, "filter", tables);
+                        "db", dbName, "filter", tables);
             }
             CdcProvider.CdcCheckResult cdcResult = cdcChecker.check(conn, dbName, tableList);
             if (cdcResult.hasError()) {
@@ -289,7 +289,7 @@ public class SnapshotStep implements MigrationStep {
                     snapshotConfig.snapshotMaxThreads(), dbName);
             Map<String, Long> estimates = sourceDriver.schemaExtractor().estimateRowCounts(conn, tableList);
             batchWriter.setTableEstimates(estimates);
-            Log.info(log, "snapshot starting", "database", dbName,
+            Log.info(log, "snapshot starting", "db", dbName,
                     "tables", tableList.size(), "totalRows",
                     estimates.values().stream().mapToLong(v -> v).sum());
             for (int i = 0; i < tableList.size(); i++) {
@@ -304,7 +304,7 @@ public class SnapshotStep implements MigrationStep {
             // If every table is empty, skip Debezium engine entirely.
             // Debezium SQL Server connector hangs on all-empty databases (no completion signal).
             if (allTablesEmpty(conn, tableList, sourceDriver.type())) {
-                Log.info(log, "all tables empty, skipping debezium engine", "database", dbName);
+                Log.info(log, "all tables empty, skipping debezium engine", "db", dbName);
                 writeEmptyDbOffsets(dbName, snapshotConfig);
                 return new SnapshotDbResult(dbName, tableList.size(), 0L, Instant.now(), null);
             }
@@ -342,7 +342,7 @@ public class SnapshotStep implements MigrationStep {
                         engine.close();
                         if (!done.await(30, TimeUnit.SECONDS)) {
                             Log.warn(log, "engine.run() did not return within 30s after close",
-                                    "database", dbName);
+                                    "db", dbName);
                         }
                         break;
                     }
@@ -361,7 +361,7 @@ public class SnapshotStep implements MigrationStep {
                 executor.shutdown();
                 if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
                     Log.warn(log, "snapshot executor did not exit within 30s, forcing shutdown",
-                            "database", dbName);
+                            "db", dbName);
                     executor.shutdownNow();
                     executor.awaitTermination(5, TimeUnit.SECONDS);
                 }
@@ -369,29 +369,29 @@ public class SnapshotStep implements MigrationStep {
                 sink.logTableCounts();
                 finalRows = batchWriter.getTotalRows();
                 Log.info(log, "snapshot finished, flushing",
-                        "database", dbName, "totalRows", finalRows,
+                        "db", dbName, "totalRows", finalRows,
                         "pendingRows", batchWriter.getPendingWrites());
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
-                Log.info(log, "snapshot finished, flushed", "database", dbName,
+                Log.info(log, "snapshot finished, flushed", "db", dbName,
                         "flushMs", t2 - t1);
             }
 
             return new SnapshotDbResult(dbName, tableList.size(),
                     finalRows, Instant.now(), null);
         } catch (Exception e) {
-            Log.error(log, "database snapshot error", "database", dbName, "error", e.getMessage(),
+            Log.error(log, "database snapshot error", "db", dbName, "error", e.getMessage(),
                     "exceptionType", e.getClass().getName());
             // Log root cause
             Throwable cause = e;
             while (cause.getCause() != null && cause.getCause() != cause) {
                 cause = cause.getCause();
             }
-            Log.error(log, "root cause", "database", dbName, "type", cause.getClass().getName(), "message", cause.getMessage());
+            Log.error(log, "root cause", "db", dbName, "type", cause.getClass().getName(), "message", cause.getMessage());
             // Full stack trace as structured fields (one frame per field for greppability)
             StackTraceElement[] frames = cause.getStackTrace();
             for (int i = 0; i < Math.min(frames.length, 20); i++) {
-                Log.error(log, "stack", "database", dbName, "frame", frames[i].toString());
+                Log.error(log, "stack", "db", dbName, "frame", frames[i].toString());
             }
             return new SnapshotDbResult(dbName, 0, 0L,
                     Instant.now(), e.getMessage());
@@ -449,17 +449,17 @@ public class SnapshotStep implements MigrationStep {
             String hexLsn = sourceDriver.captureCdcStartPoint(dbName);
             if (hexLsn == null) {
                 Log.warn(log, "no LSN captured for empty database, sync cannot resume from this point",
-                        "database", dbName);
+                        "db", dbName);
                 return;
             }
             String debeziumLsn = com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium(hexLsn);
             String offsetPath = snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset";
             com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, dbName, debeziumLsn);
-            Log.info(log, "offset written for empty database", "database", dbName,
+            Log.info(log, "offset written for empty database", "db", dbName,
                     "path", offsetPath, "lsn", debeziumLsn);
         } catch (Exception e) {
             Log.warn(log, "failed to write offset for empty database, sync cannot resume",
-                    "database", dbName, "error", e.getMessage());
+                    "db", dbName, "error", e.getMessage());
         }
     }
 
@@ -470,9 +470,9 @@ public class SnapshotStep implements MigrationStep {
      */
     private void printDbResult(String dbName, SnapshotDbResult r, long elapsedMs) {
         if (r.isError()) {
-            Log.error(log, "database snapshot failed", "database", dbName, "error", r.error());
+            Log.error(log, "database snapshot failed", "db", dbName, "error", r.error());
         } else {
-            Log.info(log, "database snapshot done", "database", dbName,
+            Log.info(log, "database snapshot done", "db", dbName,
                     "tables", r.tables(), "rows", r.rows(), "ms", elapsedMs);
         }
     }

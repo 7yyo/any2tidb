@@ -109,6 +109,7 @@ public class DumpStep implements MigrationStep {
         int chunkSize             = ctx.get("dumpChunkSize",        Integer.class);
         int fileSizeMb            = ctx.get("dumpFileSizeMb",       Integer.class);
         int concurrency           = ctx.get("dumpConcurrency",      Integer.class);
+        boolean noSnapshot       = ctx.has("dumpNoSnapshot") && ctx.get("dumpNoSnapshot", Boolean.class);
 
         Path outputRoot = resolveOutputDir(outputDir);
         Log.info(log, "Dump started", "outputDir", outputRoot.toString());
@@ -153,7 +154,7 @@ public class DumpStep implements MigrationStep {
         try {
             allResults = dumpWithSnapshots(ctx, connFactory, dbNames,
                     tables, chunkSize, threshold, concurrency, outputRoot,
-                    startLsnByDb);
+                    startLsnByDb, noSnapshot);
         } catch (IllegalStateException e) {
             return StepResult.fatal(e.getMessage());
         }
@@ -204,7 +205,8 @@ public class DumpStep implements MigrationStep {
                                                      long threshold,
                                                      int concurrency,
                                                      Path outputRoot,
-                                                     Map<String, String> startLsnByDb) {
+                                                     Map<String, String> startLsnByDb,
+                                                     boolean noSnapshot) {
         List<DumpTableResult> allResults = new ArrayList<>();
         List<String> allSnapNames = new ArrayList<>();
 
@@ -212,66 +214,88 @@ public class DumpStep implements MigrationStep {
         try {
             masterConn = connFactory.apply("master");
 
-            // 1. Check prerequisites (Enterprise/Developer edition)
-            consistency.checkPrerequisites(masterConn);
-
-            // 2. Create all snapshots + capture CDC start LSNs
-            Map<String, ConsistencyProvider.SnapshotInfo> snapMap =
-                    consistency.createSnapshots(masterConn, dbNames, outputRoot);
             Map<String, String> snapNameMap = new LinkedHashMap<>();
-            List<String> lsnFailedDbs = new ArrayList<>();
-            for (var entry : snapMap.entrySet()) {
-                String dbName = entry.getKey();
-                ConsistencyProvider.SnapshotInfo info = entry.getValue();
-                snapNameMap.put(dbName, info.snapName());
-                allSnapNames.add(info.snapName());
-                if (info.lsn() != null) {
-                    startLsnByDb.put(dbName, info.lsn());
-                } else {
-                    lsnFailedDbs.add(dbName);
+
+            if (!noSnapshot) {
+                // 1. Check prerequisites (Enterprise/Developer edition)
+                consistency.checkPrerequisites(masterConn);
+
+                // 2. Create all snapshots + capture CDC start LSNs
+                Map<String, ConsistencyProvider.SnapshotInfo> snapMap =
+                        consistency.createSnapshots(masterConn, dbNames, outputRoot);
+                List<String> lsnFailedDbs = new ArrayList<>();
+                for (var entry : snapMap.entrySet()) {
+                    String dbName = entry.getKey();
+                    ConsistencyProvider.SnapshotInfo info = entry.getValue();
+                    snapNameMap.put(dbName, info.snapName());
+                    allSnapNames.add(info.snapName());
+                    if (info.lsn() != null) {
+                        startLsnByDb.put(dbName, info.lsn());
+                    } else {
+                        lsnFailedDbs.add(dbName);
+                    }
+                }
+                Log.info(log, "Database snapshots created", "count", allSnapNames.size());
+
+                // If any DB failed CDC/LSN capture, ask user whether to continue
+                if (!lsnFailedDbs.isEmpty()) {
+                    Log.warn(log, "CDC/LSN capture failed for some databases",
+                            "databases", lsnFailedDbs,
+                            "note", "dump can proceed without CDC, but sync mode will not be able to resume");
+                    System.err.println();
+                    System.err.println("WARNING: CDC/LSN capture failed for: " + lsnFailedDbs);
+                    System.err.println("Dump can proceed without CDC, but incremental sync cannot resume from this dump.");
+                    System.err.print("Continue with dump? (y/N): ");
+                    System.err.flush();
+                    String answer = System.console() != null
+                            ? System.console().readLine()
+                            : new java.util.Scanner(System.in).nextLine();
+                    if (answer == null || !answer.trim().equalsIgnoreCase("y")) {
+                        throw new IllegalStateException(
+                                "Dump aborted by user — CDC/LSN capture failed for: " + lsnFailedDbs);
+                    }
+                }
+            } else {
+                Log.info(log, "Snapshot creation skipped (--no-snapshot)",
+                        "databases", dbNames.size());
+                // Still capture CDC LSNs for sync continuity
+                for (String dbName : dbNames) {
+                    try {
+                        String lsn = sourceDriver.captureCdcStartPoint(dbName);
+                        if (lsn != null) {
+                            startLsnByDb.put(dbName, lsn);
+                            Log.info(log, "LSN captured (no-snapshot)", "db", dbName, "lsn", lsn);
+                        }
+                    } catch (Exception e) {
+                        Log.warn(log, "CDC/LSN capture failed (no-snapshot), dump can proceed but sync will not be able to resume",
+                                "db", dbName, "error", e.getMessage());
+                    }
                 }
             }
-            Log.info(log, "Database snapshots created", "count", allSnapNames.size());
 
-            // If any DB failed CDC/LSN capture, ask user whether to continue
-            if (!lsnFailedDbs.isEmpty()) {
-                Log.warn(log, "CDC/LSN capture failed for some databases",
-                        "databases", lsnFailedDbs,
-                        "note", "dump can proceed without CDC, but sync mode will not be able to resume");
-                System.err.println();
-                System.err.println("WARNING: CDC/LSN capture failed for: " + lsnFailedDbs);
-                System.err.println("Dump can proceed without CDC, but incremental sync cannot resume from this dump.");
-                System.err.print("Continue with dump? (y/N): ");
-                System.err.flush();
-                String answer = System.console() != null
-                        ? System.console().readLine()
-                        : new java.util.Scanner(System.in).nextLine();
-                if (answer == null || !answer.trim().equalsIgnoreCase("y")) {
-                    throw new IllegalStateException(
-                            "Dump aborted by user — CDC/LSN capture failed for: " + lsnFailedDbs);
-                }
-            }
-
-            // 3. Discover all PK-range work items from snapshot databases
+            // 3. Discover all PK-range work items from source databases
             List<PkRange> allRanges = new ArrayList<>();
             for (String dbName : dbNames) {
-                String snapName = snapNameMap.get(dbName);
-                if (snapName == null) continue;
-
-                String snapUrl = consistency.jdbcUrlForSnapshot(dbName, snapName);
-                try (Connection snapConn = DriverManager.getConnection(snapUrl,
+                String connUrl;
+                if (noSnapshot) {
+                    connUrl = sourceDriver.buildJdbcUrlTo(config.getSource(), dbName);
+                } else {
+                    String snapName = snapNameMap.get(dbName);
+                    if (snapName == null) continue;
+                    connUrl = consistency.jdbcUrlForSnapshot(dbName, snapName);
+                }
+                try (Connection srcConn = DriverManager.getConnection(connUrl,
                         config.getSource().getUsername(), config.getSource().getPassword())) {
-                    List<String[]> tableList = schemaExtractor.listTables(snapConn,
-                            tablesFilter);
+                    List<String[]> tableList = schemaExtractor.listTables(srcConn, tablesFilter);
                     if (tablesFilter != null && !tablesFilter.isEmpty() && tableList.isEmpty()) {
                         Log.warn(log, "--tables filter matched nothing, check spelling",
-                                "database", dbName, "filter", tablesFilter);
+                                "db", dbName, "filter", tablesFilter);
                     }
                     for (String[] entry : tableList) {
                         String schema = entry[0];
                         String table = entry[1];
                         List<PkRange> ranges = dumpExtractor.computePkRanges(
-                                snapConn, dbName, schema, table, chunkSize);
+                                srcConn, dbName, schema, table, chunkSize);
                         allRanges.addAll(ranges);
                     }
                 }
@@ -282,8 +306,6 @@ public class DumpStep implements MigrationStep {
                     "concurrency", concurrency);
 
             // 4. Submit all work items to shared thread pool.
-            //    Each TABLE gets one shared CsvDumpWriter — chunks of the same
-            //    table write to the same CSV file until it reaches the size threshold.
             ExecutorService pool = Executors.newFixedThreadPool(concurrency);
             Map<String, CsvDumpWriter> writersByTable = new ConcurrentHashMap<>();
             List<Future<DumpTableResult>> futures = new ArrayList<>();
@@ -293,7 +315,7 @@ public class DumpStep implements MigrationStep {
                 CsvDumpWriter writer = writersByTable.computeIfAbsent(tableKey,
                         k -> new CsvDumpWriter(threshold));
                 futures.add(pool.submit(() ->
-                        dumpPkRange(range, snapNameMap, chunkSize, writer, outputRoot)));
+                        dumpPkRange(range, snapNameMap, chunkSize, writer, outputRoot, noSnapshot)));
             }
 
             pool.shutdown();
@@ -306,7 +328,7 @@ public class DumpStep implements MigrationStep {
                 if (r.isError()) {
                     allResults.add(r);
                     Log.error(log, "Chunk dump failed",
-                            "database", r.dbName(),
+                            "db", r.dbName(),
                             "table", r.schema() + "." + r.table(),
                             "error", r.error());
                     for (Future<DumpTableResult> remaining : futures) {
@@ -334,7 +356,7 @@ public class DumpStep implements MigrationStep {
                             agg.rows(), w.getFileCount(), agg.elapsedMs(), null);
                     tableAgg.put(entry.getKey(), result);
                     Log.info(log, "Table dump complete",
-                            "database", agg.dbName(),
+                            "db", agg.dbName(),
                             "table", agg.schema() + "." + agg.table(),
                             "rows", agg.rows(), "files", w.getFileCount(),
                             "ms", agg.elapsedMs());
@@ -343,10 +365,16 @@ public class DumpStep implements MigrationStep {
             allResults.addAll(tableAgg.values());
 
         } catch (Exception e) {
-            Log.error(log, "Snapshot dump failed", "databases", dbNames, "error", e.getMessage());
+            String cause = e.getCause() != null
+                    ? " cause=" + e.getCause().getClass().getSimpleName() + ": " + e.getCause().getMessage()
+                    : "";
+            Log.error(log, "Dump failed", "databases", dbNames,
+                    "error", e.getMessage() + cause);
+            Log.debug(log, "Dump failure detail", "exception",
+                    e.getClass().getName(), "trace", stackTraceHead(e));
         } finally {
-            // 5. Drop all snapshots (best-effort)
-            if (masterConn != null) {
+            // Drop snapshots (best-effort), if any were created
+            if (masterConn != null && !allSnapNames.isEmpty()) {
                 try {
                     consistency.dropSnapshots(masterConn, allSnapNames);
                 } catch (Exception e) {
@@ -365,7 +393,8 @@ public class DumpStep implements MigrationStep {
      * same table). The writer is NOT closed here — the caller manages its lifecycle.
      */
     private DumpTableResult dumpPkRange(PkRange range, Map<String, String> snapMap,
-                                         int chunkSize, DumpWriter writer, Path outputRoot) {
+                                         int chunkSize, DumpWriter writer, Path outputRoot,
+                                         boolean noSnapshot) {
         long start = System.currentTimeMillis();
         String dbName = range.dbName();
         String schema = range.schema();
@@ -373,26 +402,31 @@ public class DumpStep implements MigrationStep {
         long[] rowCount = {0L};
 
         try {
-            String snapDbName = snapMap.get(dbName);
-            String snapUrl = consistency.jdbcUrlForSnapshot(dbName, snapDbName);
-            Connection snapConn = DriverManager.getConnection(snapUrl,
+            String connUrl;
+            if (noSnapshot) {
+                connUrl = sourceDriver.buildJdbcUrlTo(config.getSource(), dbName);
+            } else {
+                String snapDbName = snapMap.get(dbName);
+                connUrl = consistency.jdbcUrlForSnapshot(dbName, snapDbName);
+            }
+            Connection srcConn = DriverManager.getConnection(connUrl,
                     config.getSource().getUsername(), config.getSource().getPassword());
             try {
-                List<String> columns = dumpExtractor.getColumnNames(snapConn, schema, table);
-                dumpExtractor.streamTableRange(snapConn, range, chunkSize, batch -> {
+                List<String> columns = dumpExtractor.getColumnNames(srcConn, schema, table);
+                dumpExtractor.streamTableRange(srcConn, range, chunkSize, batch -> {
                     writer.writeBatch(outputRoot, dbName, schema, table, columns, batch);
                     rowCount[0] += batch.rows().size();
                 });
                 long elapsed = System.currentTimeMillis() - start;
                 Log.info(log, "Chunk dump complete",
-                        "database", dbName,
+                        "db", dbName,
                         "table", schema + "." + table,
                         "chunk", range.chunkIndex(),
                         "rows", rowCount[0], "ms", elapsed);
                 return new DumpTableResult(dbName, schema, table,
                         rowCount[0], 0, elapsed, null);
             } finally {
-                try { snapConn.close(); } catch (Exception ignored) {}
+                try { srcConn.close(); } catch (Exception ignored) {}
             }
         } catch (Exception e) {
             return new DumpTableResult(dbName, schema, table,
@@ -440,13 +474,24 @@ public class DumpStep implements MigrationStep {
                 String debeziumLsn = hexLsnToDebezium(hexLsn);
                 String path = offsetDir.resolve(dbName + ".offset").toString();
                 writeDebeziumOffset(path, dbName, debeziumLsn);
-                Log.info(log, "Debezium offset written", "database", dbName,
+                Log.info(log, "Debezium offset written", "db", dbName,
                         "path", path, "lsn", debeziumLsn);
             } catch (Exception e) {
-                Log.warn(log, "Failed to write Debezium offset", "database", dbName,
+                Log.warn(log, "Failed to write Debezium offset", "db", dbName,
                         "error", e.getMessage());
             }
         }
+    }
+
+    private static String stackTraceHead(Throwable t) {
+        StackTraceElement[] trace = t.getStackTrace();
+        if (trace == null || trace.length == 0) return "(no stack trace)";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(5, trace.length); i++) {
+            if (i > 0) sb.append(" <- ");
+            sb.append(trace[i].toString());
+        }
+        return sb.toString();
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────

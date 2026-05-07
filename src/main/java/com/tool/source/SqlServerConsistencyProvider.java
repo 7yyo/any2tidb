@@ -96,16 +96,23 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
                 String lsn = null;
                 try {
                     lsn = ensureCdcAndCaptureLsn(dbName);
-                    Log.info(log, "LSN captured", "database", dbName, "lsn", lsn);
+                    Log.info(log, "LSN captured", "db", dbName, "lsn", lsn);
                 } catch (Exception e) {
                     Log.warn(log, "CDC/LSN capture failed, dump can proceed but sync will not be able to resume from this point",
-                            "database", dbName, "error", e.getMessage());
+                            "db", dbName, "error", e.getMessage());
                 }
                 result.put(dbName, new SnapshotInfo(snapName, lsn));
                 Log.info(log, "Database snapshot created", "source", dbName, "snapshot", snapName,
                         "lsn", lsn != null ? lsn : "N/A");
             }
         } catch (Exception e) {
+            // Log which database it was processing when it failed
+            int nextIdx = created.size(); // index of the db that failed
+            if (nextIdx < dbNames.size()) {
+                Log.warn(log, "Snapshot creation failed while processing database",
+                        "failedDb", dbNames.get(nextIdx), "index", nextIdx, "total", dbNames.size(),
+                        "error", e.getMessage());
+            }
             // Rollback: drop already-created snapshots on snapshot creation failure
             for (String snap : created) {
                 try { dropSnapshot(masterConn, snap); } catch (Exception ignored) {}
@@ -189,6 +196,12 @@ public class SqlServerConsistencyProvider implements ConsistencyProvider {
 
         try (Statement st = masterConn.createStatement()) {
             st.execute(sb.toString());
+        } catch (java.sql.SQLException e) {
+            throw new java.sql.SQLException(
+                    String.format("Failed to create snapshot '%s' for database '%s' (files=%d, snap_dir=%s): [%s/%d] %s",
+                            snapName, dbName, files.size(), snapDir.toAbsolutePath(),
+                            e.getSQLState(), e.getErrorCode(), e.getMessage()),
+                    e.getSQLState(), e.getErrorCode(), e);
         }
     }
 

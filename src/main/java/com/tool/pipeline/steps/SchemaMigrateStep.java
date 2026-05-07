@@ -263,7 +263,7 @@ public class SchemaMigrateStep implements MigrationStep {
         List<String[]> tableList = extractor.listTables(ssConn, tables);
         if (tables != null && !tables.isEmpty() && tableList.isEmpty()) {
             Log.warn(log, "--tables filter matched nothing, check spelling",
-                    "database", dbName, "filter", tables);
+                    "db", dbName, "filter", tables);
         }
         Log.info(log, "Starting conversion", "db", dbName, "tables", tableList.size());
 
