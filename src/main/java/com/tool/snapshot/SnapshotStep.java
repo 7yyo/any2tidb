@@ -339,8 +339,6 @@ public class SnapshotStep implements MigrationStep {
                 long startMs = System.currentTimeMillis();
                 while (!done.await(2, TimeUnit.SECONDS)) {
                     if (sink.isSnapshotComplete()) {
-                        long rows = batchWriter.getTotalRows();
-                        Log.info(log, "snapshot finished", "database", dbName, "rows", rows);
                         engine.close();
                         if (!done.await(30, TimeUnit.SECONDS)) {
                             Log.warn(log, "engine.run() did not return within 30s after close",
@@ -370,8 +368,9 @@ public class SnapshotStep implements MigrationStep {
                 long t1 = System.currentTimeMillis();
                 sink.logTableCounts();
                 finalRows = batchWriter.getTotalRows();
-                Log.info(log, "snapshot data loaded, flushing remaining writes",
-                        "database", dbName, "pendingRows", batchWriter.getPendingWrites());
+                Log.info(log, "snapshot finished, flushing",
+                        "database", dbName, "totalRows", finalRows,
+                        "pendingRows", batchWriter.getPendingWrites());
                 batchWriter.flushAll();
                 long t2 = System.currentTimeMillis();
                 Log.info(log, "snapshot shutdown", "db", dbName,
