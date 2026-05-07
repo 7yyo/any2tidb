@@ -21,10 +21,10 @@ class TaskManagerTest {
         assertEquals("RUNNING", meta.getStatus());
         assertNotNull(meta.getCreatedAt());
         assertNotNull(meta.getStartedAt());
-        assertTrue(tempDir.resolve("tasks/test-task/.lock").toFile().exists());
+        assertTrue(tempDir.resolve("tasks/test-task/.internal/.lock").toFile().exists());
         assertNotNull(tm.readMeta("test-task"));
-        assertTrue(tempDir.resolve("tasks/test-task/offsets").toFile().exists());
-        assertTrue(tempDir.resolve("tasks/test-task/history").toFile().exists());
+        assertTrue(tempDir.resolve("tasks/test-task/.internal/offsets").toFile().exists());
+        assertTrue(tempDir.resolve("tasks/test-task/.internal/history").toFile().exists());
         assertTrue(tempDir.resolve("tasks/test-task/output").toFile().exists());
         tm.unlock();
     }
@@ -125,6 +125,37 @@ class TaskManagerTest {
         assertEquals("status-test", m.getTask());
         assertEquals("schema", m.getMode());
         assertEquals("RUNNING", m.getStatus());
+    }
+
+    @Test
+    void historyRecordsCreateStatusAndDelete() throws Exception {
+        TaskManager tm = new TaskManager(tempDir.resolve("tasks"));
+        TaskMeta meta = tm.create("hist-test", "schema", "sqlserver");
+
+        // CREATE should be recorded
+        var h1 = tm.history("hist-test");
+        assertEquals(1, h1.size());
+        assertEquals("CREATE", h1.get(0).action());
+
+        // Status change to SUCCESS via writeMeta
+        meta.markSuccess();
+        tm.writeMeta("hist-test", meta);
+
+        var h2 = tm.history("hist-test");
+        assertEquals(2, h2.size());
+        assertEquals("CREATE", h2.get(0).action());
+        assertEquals("SUCCESS", h2.get(1).action());
+
+        tm.unlock();
+
+        // DELETE should be recorded, and history survives task deletion
+        tm.delete("hist-test");
+
+        var h3 = tm.history("hist-test");
+        assertEquals(3, h3.size());
+        assertEquals("CREATE", h3.get(0).action());
+        assertEquals("SUCCESS", h3.get(1).action());
+        assertEquals("DELETE", h3.get(2).action());
     }
 
     @Test

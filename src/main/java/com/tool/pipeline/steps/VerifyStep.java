@@ -2,6 +2,7 @@ package com.tool.pipeline.steps;
 
 import com.tool.config.AppConfig;
 import com.tool.logging.Log;
+import com.tool.source.SourceDriver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.tool.output.SummaryPrinter;
@@ -11,7 +12,6 @@ import com.tool.pipeline.StepContext;
 import com.tool.pipeline.StepResult;
 import com.tool.schema.verifier.SchemaVerifier;
 import com.tool.schema.verifier.VerifyResult;
-import com.tool.source.SourceDriver;
 
 import static com.tool.common.SqlUtils.escapeBacktick;
 
@@ -19,6 +19,8 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Re-connects to both databases and runs schema verification,
@@ -56,26 +58,24 @@ public class VerifyStep implements MigrationStep {
         }
 
         int totalMismatch = 0;
-        int totalNote = 0;
         int totalDbFailed = 0;
 
         for (SummaryPrinter.DbSummary db : summaries) {
-            // Reconstruct succeededTables as String[][] from convResults (OK/WARN only)
             List<String[]> succeededTables = db.convResults().entrySet().stream()
                     .filter(e -> {
                         var s = e.getValue().getStatus();
                         return s == ConversionResult.Status.OK
                             || s == ConversionResult.Status.WARN;
                     })
-                    .map(e -> e.getKey().split("\\.", 2))  // "schema.table" → ["schema","table"]
+                    .map(e -> e.getKey().split("\\.", 2))
                     .toList();
 
             if (succeededTables.isEmpty()) continue;
 
             int dbMismatch = 0;
-            int dbNote = 0;
+            int dbOk = 0;
 
-            Log.info(log, "VERIFY " + db.dbName(), "tables", succeededTables.size());
+            Log.info(log, "VERIFY starting", "db", db.dbName(), "tables", succeededTables.size());
 
             try (Connection ssConn = DriverManager.getConnection(
                          sourceDriver.buildJdbcUrlTo(config.getSource(), db.dbName()),
@@ -83,25 +83,51 @@ public class VerifyStep implements MigrationStep {
                          config.getSource().getPassword());
                  Connection tidbConn = openTiDB(db.dbName())) {
 
+                // ── Check: tables (migration scope vs TiDB) ──
+                // Compare ALL tables the schema migration attempted (not just OK/WARN).
+                // ERROR/SKIP tables also won't exist on TiDB — report them as missing.
+                Set<String> expectedTables = db.convResults().keySet().stream()
+                        .map(k -> k.split("\\.", 2)[1].toLowerCase())
+                        .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
+                Set<String> tidbTables = new java.util.LinkedHashSet<>();
+                try (var rs = tidbConn.getMetaData().getTables(tidbConn.getCatalog(), null, null, new String[]{"TABLE"})) {
+                    while (rs.next()) tidbTables.add(rs.getString("TABLE_NAME").toLowerCase());
+                }
+                if (!expectedTables.equals(tidbTables)) {
+                    Set<String> missing = new java.util.LinkedHashSet<>(expectedTables);
+                    missing.removeAll(tidbTables);
+                    Set<String> extra = new java.util.LinkedHashSet<>(tidbTables);
+                    extra.removeAll(expectedTables);
+                    if (!missing.isEmpty() || !extra.isEmpty()) {
+                        dbMismatch++;
+                        Log.warn(log, "VERIFY tables", "db", db.dbName(), "reason", "tables",
+                                "missing", missing.isEmpty() ? "[]" : "[" + String.join(", ", missing) + "]",
+                                "extra", extra.isEmpty() ? "[]" : "[" + String.join(", ", extra) + "]");
+                    }
+                }
+
+                // ── Per-table verify ──
                 List<VerifyResult> results = verifier.verifyAll(ssConn, tidbConn, succeededTables);
 
-                for (VerifyResult r : results) {
-                    if (r.isMismatch()) {
+                for (int i = 0; i < results.size(); i++) {
+                    VerifyResult r = results.get(i);
+                    String prefix = (i == results.size() - 1) ? "  └─ " : "  ├─ ";
+
+                    if (r.isOk()) {
+                        dbOk++;
+                    } else {
                         dbMismatch++;
-                        List<String> diffs = r.diffLines();
-                        Log.warn(log, r.fullTableName(), "status", "MISMATCH (" + diffs.size() + ")");
-                        for (int j = 0; j < diffs.size(); j++) {
-                            String prefix = (j == diffs.size() - 1) ? "  └─ " : "  ├─ ";
-                            Log.warn(log, prefix + diffs.get(j));
-                        }
-                    }
-                    if (r.hasKnownLoss()) {
-                        dbNote++;
-                        List<String> notes = r.knownLossLines();
-                        Log.info(log, r.fullTableName(), "status", "NOTE (" + notes.size() + ")");
-                        for (int j = 0; j < notes.size(); j++) {
-                            String prefix = (j == notes.size() - 1) ? "  └─ " : "  ├─ ";
-                            Log.info(log, prefix + notes.get(j));
+                        List<VerifyResult.Mismatch> mismatches = r.mismatches();
+                        Log.warn(log, prefix + r.fullTableName(),
+                                "status", "MISMATCH",
+                                "reason", mismatches.get(0).reason(),
+                                "src", mismatches.get(0).src(),
+                                "tidb", mismatches.get(0).tidb());
+                        for (int j = 1; j < mismatches.size(); j++) {
+                            VerifyResult.Mismatch m = mismatches.get(j);
+                            String subPrefix = (i == results.size() - 1) ? "     " : "  │  ";
+                            Log.warn(log, subPrefix + m.reason(),
+                                    "src", m.src(), "tidb", m.tidb());
                         }
                     }
                 }
@@ -112,13 +138,12 @@ public class VerifyStep implements MigrationStep {
                 continue;
             }
 
-            Log.info(log, "VERIFY " + db.dbName(), "mismatch", dbMismatch, "note", dbNote);
+            Log.info(log, "VERIFY complete for database", "db", db.dbName(),
+                    "ok", dbOk, "mismatch", dbMismatch);
             totalMismatch += dbMismatch;
-            totalNote += dbNote;
         }
 
-        Log.info(log, "VERIFY complete", "mismatch", totalMismatch, "note", totalNote,
-                "dbFailed", totalDbFailed);
+        Log.info(log, "VERIFY complete", "mismatch", totalMismatch, "dbFailed", totalDbFailed);
         return StepResult.ok("verify complete");
     }
 

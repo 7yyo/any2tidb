@@ -223,7 +223,7 @@ class DbManager {
         List<TaskMeta> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(
-                     "SELECT * FROM task WHERE status != 'DELETED' ORDER BY created_at DESC")) {
+                     "SELECT * FROM task WHERE status != 'DELETED' ORDER BY created_at ASC")) {
             while (rs.next()) list.add(map(rs));
         }
         return list;

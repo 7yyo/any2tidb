@@ -473,7 +473,7 @@ public class DumpStep implements MigrationStep {
             try {
                 String debeziumLsn = hexLsnToDebezium(hexLsn);
                 String path = offsetDir.resolve(dbName + ".offset").toString();
-                writeDebeziumOffset(path, dbName, debeziumLsn);
+                writeDebeziumOffset(path, sourceDriver.type(), dbName, debeziumLsn);
                 Log.info(log, "Debezium offset written", "db", dbName,
                         "path", path, "lsn", debeziumLsn);
             } catch (Exception e) {

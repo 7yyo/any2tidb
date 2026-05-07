@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.Calendar;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
@@ -27,7 +28,7 @@ public class SinkRecordConverter {
     private final DataSource targetDs;
     private static final Logger log = LoggerFactory.getLogger(SinkRecordConverter.class);
     /** Cache of "db.table" → column name → SQL type */
-    private final Map<String, Map<String, Integer>> typeCache = new HashMap<>();
+    private final Map<String, Map<String, Integer>> typeCache = new ConcurrentHashMap<>();
 
     public SinkRecordConverter(DataSource targetDs) {
         this.targetDs = targetDs;

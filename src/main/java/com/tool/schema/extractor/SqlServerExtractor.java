@@ -70,9 +70,11 @@ public class SqlServerExtractor implements SchemaExtractor {
             String schema = entry.getKey();
             List<String> schemaTables = entry.getValue();
             String inClause = schemaTables.stream().map(t -> "?").collect(Collectors.joining(","));
-            String sql = "SELECT t.name, SUM(p.row_count) FROM sys.tables t " +
+            // sys.partitions is a catalog view (public access), unlike
+            // sys.dm_db_partition_stats which requires VIEW DATABASE STATE.
+            String sql = "SELECT t.name, SUM(p.rows) FROM sys.tables t " +
                          "JOIN sys.schemas s ON t.schema_id = s.schema_id " +
-                         "JOIN sys.dm_db_partition_stats p ON t.object_id = p.object_id " +
+                         "JOIN sys.partitions p ON t.object_id = p.object_id " +
                          "WHERE p.index_id IN (0,1) AND s.name=? AND t.name IN (" + inClause + ") " +
                          "GROUP BY t.name";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {

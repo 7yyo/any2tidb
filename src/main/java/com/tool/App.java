@@ -91,8 +91,8 @@ public class App implements ApplicationRunner {
                     case "restart" -> taskRestart(name);
                     case "delete"  -> taskDelete(name);
                     case "history" -> taskHistory(name);
-                    default -> say("Usage: any2tidb task " + name + " stop|pause|resume|restart|delete|history"
-                            + "\nRun 'any2tidb task --help' for details.");
+                    default -> say("Usage: a2t task " + name + " stop|pause|resume|restart|delete|history"
+                            + "\nRun 'a2t task --help' for details.");
                 }
             }
             return;
@@ -118,9 +118,9 @@ public class App implements ApplicationRunner {
                 if (SOURCES.contains(arg)) {
                     printUsage(arg);
                 } else if (SOURCES.stream().flatMap(s -> modesFor(s).stream()).anyMatch(arg::equals)) {
-                    sayError("source is required. Usage: any2tidb <source> " + arg);
+                    sayError("source is required. Usage: a2t <source> " + arg);
                 } else {
-                    sayError("unknown argument '" + arg + "'\nRun 'any2tidb --help' for usage.");
+                    sayError("unknown argument '" + arg + "'\nRun 'a2t --help' for usage.");
                 }
             } else {
                 printUsage();
@@ -181,40 +181,40 @@ public class App implements ApplicationRunner {
 
     private static void printUsage() {
         System.out.println();
-        System.out.println("any2tidb — Any DB → TiDB Migration Tool");
+        System.out.println("a2t — Any DB → TiDB Migration Tool");
         System.out.println();
-        System.out.println("Usage: any2tidb <source> <mode> [options]");
-        System.out.println("       any2tidb task <command> [args]");
+        System.out.println("Usage: a2t <source> <mode> [options]");
+        System.out.println("       a2t task <command> [args]");
         System.out.println();
         System.out.println("Sources:");
         for (String s : SOURCES) System.out.println("  " + s);
         System.out.println();
-        System.out.println("Each source supports different modes. Run 'any2tidb <source> --help'");
-        System.out.println("to see available modes. Run 'any2tidb task --help' for task management.");
+        System.out.println("Each source supports different modes. Run 'a2t <source> --help'");
+        System.out.println("to see available modes. Run 'a2t task --help' for task management.");
         System.out.println();
     }
 
     private static void printUsage(String source) {
         System.out.println();
-        System.out.println("any2tidb " + source + " — Any DB → TiDB Migration Tool");
+        System.out.println("a2t " + source + " — Any DB → TiDB Migration Tool");
         System.out.println();
-        System.out.println("Usage: any2tidb " + source + " <mode> [options]");
+        System.out.println("Usage: a2t " + source + " <mode> [options]");
         System.out.println();
         System.out.println("Modes:");
         for (String m : modesFor(source)) {
             System.out.println("  " + modeDescription(m));
         }
         System.out.println();
-        System.out.println("Run 'any2tidb " + source + " <mode> --help' for mode-specific options.");
+        System.out.println("Run 'a2t " + source + " <mode> --help' for mode-specific options.");
         System.out.println();
     }
 
     private static void printUsage(String source, String mode) {
         boolean needTask = true;
         System.out.println();
-        System.out.println("any2tidb " + source + " " + mode + " — Any DB → TiDB Migration Tool");
+        System.out.println("a2t " + source + " " + mode + " — Any DB → TiDB Migration Tool");
         System.out.println();
-        System.out.println("Usage: any2tidb " + source + " " + mode
+        System.out.println("Usage: a2t " + source + " " + mode
                 + " [--task=NAME] [options]");
         System.out.println();
         System.out.println("Options:");
@@ -244,7 +244,7 @@ public class App implements ApplicationRunner {
             System.out.println("  --snapshot-threads=N      Tables snapshotted in parallel, and TiDB write threads (default: 1)");
             System.out.println("  --snapshot-db-threads=N   Process N databases concurrently (default: 1)");
             System.out.println("  --batch-size=N            Rows per INSERT batch to TiDB (default: 500)");
-            System.out.println("  --fetch-size=N            Rows per JDBC fetch from source during snapshot (default: 10000)");
+            System.out.println("  --fetch-size=N            Rows per JDBC fetch from source during snapshot (default: 1000)");
             System.out.println("  --max-queue-size=N        Debezium internal queue capacity (default: 16384)");
             System.out.println("  --poll-interval-ms=N      Debezium poll interval in ms (default: 500)");
             System.out.println("  --offset-flush-ms=N       Offset file flush interval in ms (default: 10000)");
@@ -261,22 +261,22 @@ public class App implements ApplicationRunner {
 
     private static void printTaskUsage() {
         System.out.println();
-        System.out.println("Usage: any2tidb task <command|task-name> [action]");
+        System.out.println("Usage: a2t task <command|task-name> [action]");
         System.out.println();
         System.out.println("Inspect:");
         System.out.println("  list [--all]            List all tasks (--all includes deleted)");
         System.out.println("  <task-name>             Show task detail and available actions");
         System.out.println();
         System.out.println("Control a task:");
-        System.out.println("  any2tidb task <task-name> stop       Gracefully stop");
-        System.out.println("  any2tidb task <task-name> pause      Pause");
-        System.out.println("  any2tidb task <task-name> resume     Resume");
-        System.out.println("  any2tidb task <task-name> restart    Restart a crashed task");
+        System.out.println("  a2t task <task-name> stop       Gracefully stop");
+        System.out.println("  a2t task <task-name> pause      Pause");
+        System.out.println("  a2t task <task-name> resume     Resume");
+        System.out.println("  a2t task <task-name> restart    Restart a crashed task");
         System.out.println();
         System.out.println("Housekeeping:");
-        System.out.println("  any2tidb task <task-name> delete     Delete (rejected if running)");
-        System.out.println("  any2tidb task <task-name> history    Show operation history");
-        System.out.println("  any2tidb task clean                  Wipe ALL tasks");
+        System.out.println("  a2t task <task-name> delete     Delete (rejected if running)");
+        System.out.println("  a2t task <task-name> history    Show operation history");
+        System.out.println("  a2t task clean                  Wipe ALL tasks");
         System.out.println();
     }
 
@@ -414,7 +414,7 @@ public class App implements ApplicationRunner {
         }
 
         long pid = launchChildProcess(childArgs);
-        say("Task '" + taskName + "' started in background (PID: " + pid + ")\nUse 'any2tidb task list' to check status.");
+        say("Task '" + taskName + "' started in background (PID: " + pid + ")\nUse 'a2t task list' to check status.");
     }
 
     /**
@@ -503,7 +503,7 @@ public class App implements ApplicationRunner {
     public void run(ApplicationArguments args) throws Exception {
         List<String> pos = args.getNonOptionArgs();
         if (pos.size() < 2) {
-            say("Usage: any2tidb <source> <mode> [options]");
+            say("Usage: a2t <source> <mode> [options]");
             return;
         }
         String source = pos.get(0);
@@ -524,7 +524,7 @@ public class App implements ApplicationRunner {
         for (String name : args.getOptionNames()) {
             if (!allowed.contains(name)) {
                 sayError("unknown option --" + name + " for " + source + " " + mode
-                        + "\nRun 'any2tidb " + source + " " + mode + " --help' for usage.");
+                        + "\nRun 'a2t " + source + " " + mode + " --help' for usage.");
                 return;
             }
         }
@@ -1064,7 +1064,7 @@ public class App implements ApplicationRunner {
             System.out.println("Restarting with args: " + String.join(" ", storedArgs));
 
             long pid = launchChildProcess(storedArgs);
-            say("Task '" + name + "' restarted in background (PID: " + pid + ")\nUse 'any2tidb task list' to check status.");
+            say("Task '" + name + "' restarted in background (PID: " + pid + ")\nUse 'a2t task list' to check status.");
         } catch (Exception e) {
             sayError(e.getMessage());
         }

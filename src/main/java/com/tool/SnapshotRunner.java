@@ -14,6 +14,7 @@ import com.tool.task.TaskManager;
 import com.tool.task.TaskMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.boot.ApplicationArguments;
 
 import javax.sql.DataSource;
@@ -33,7 +34,11 @@ class SnapshotRunner {
         this.sourceDriver = sourceDriver;
     }
 
-    void run(ApplicationArguments args, List<String> databases, List<String> tables) throws Exception {
+    void run(ApplicationArguments args, List<String> databases, List<String> tables,
+             int dbThreads) throws Exception {
+        String taskName = App.resolveTaskName(args, sourceDriver.type(), "snapshot");
+        MDC.put("task", taskName);
+
         Logger log = LoggerFactory.getLogger(App.class);
         Log.info(log, "Welcome to any2tidb v1.0.0 — Any DB → TiDB Migration Tool");
         Log.info(log, "Connection info",
@@ -44,13 +49,9 @@ class SnapshotRunner {
         int batchSize = App.parseIntOption(args, "batch-size", SnapshotConfig.DEFAULT_BATCH_INSERT_SIZE);
         int fetchSize = App.parseIntOption(args, "fetch-size", SnapshotConfig.DEFAULT_SNAPSHOT_FETCH_SIZE);
         int snapshotThreads = App.parseIntOption(args, "snapshot-threads", SnapshotConfig.DEFAULT_SNAPSHOT_MAX_THREADS);
-        String offsetStoragePath = args.containsOption("offset-storage-path")
-                ? args.getOptionValues("offset-storage-path").get(0) : null;
-        String schemaHistoryPath = args.containsOption("schema-history-path")
-                ? args.getOptionValues("schema-history-path").get(0) : null;
         int maxQueueSize = App.parseIntOption(args, "max-queue-size", SnapshotConfig.DEFAULT_MAX_QUEUE_SIZE);
         int pollIntervalMs = App.parseIntOption(args, "poll-interval-ms", SnapshotConfig.DEFAULT_POLL_INTERVAL_MS);
-        int offsetCommitIntervalMs = App.parseIntOption(args, "offset-commit-interval-ms", SnapshotConfig.DEFAULT_OFFSET_COMMIT_INTERVAL_MS);
+        int offsetCommitIntervalMs = App.parseIntOption(args, "offset-flush-ms", SnapshotConfig.DEFAULT_OFFSET_COMMIT_INTERVAL_MS);
 
         StepContext ctx = new StepContext();
         ctx.put("dryRun", false);
@@ -62,59 +63,51 @@ class SnapshotRunner {
         ctx.put("maxQueueSize", maxQueueSize);
         ctx.put("pollIntervalMs", pollIntervalMs);
         ctx.put("offsetCommitIntervalMs", offsetCommitIntervalMs);
+        ctx.put("snapshotDbThreads", dbThreads);
 
-        // Task support — mandatory
-        if (!args.containsOption("task") || args.getOptionValues("task").isEmpty()) {
-            throw new IllegalArgumentException("--task=NAME is required");
-        }
-        String taskName = args.getOptionValues("task").get(0);
-        if (taskName == null || taskName.isBlank()) {
-            throw new IllegalArgumentException("--task=NAME requires a non-empty name");
-        }
         TaskManager taskManager = new TaskManager(Path.of("tasks"));
-        TaskMeta meta = taskManager.createInteractive(taskName, "snapshot", "sqlserver");
-        TaskMeta.SourceInfo src = meta.getSource();
-        src.setHost(config.getSource().getHost());
-        src.setPort(config.getSource().getPort());
-        src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
-        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-        tgt.setType("tidb");
-        tgt.setHost(config.getTarget().getHost());
-        tgt.setPort(config.getTarget().getPort());
-        tgt.setDatabase("");
-        meta.setTarget(tgt);
-        taskManager.writeMeta(taskName, meta);
-
-        App.resolveTaskPaths(taskName, taskManager, ctx);
-        // Task dir provides defaults; CLI flags can override
-        if (offsetStoragePath == null) {
-            offsetStoragePath = ctx.get("offsetStoragePath", String.class);
-        }
-        if (schemaHistoryPath == null) {
-            schemaHistoryPath = ctx.get("schemaHistoryPath", String.class);
-        }
-        ctx.put("taskManager", taskManager);
-        ctx.put("taskName", taskName);
-        if (offsetStoragePath != null) ctx.put("offsetStoragePath", offsetStoragePath);
-        if (schemaHistoryPath != null) ctx.put("schemaHistoryPath", schemaHistoryPath);
-
-        List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, sourceDriver));
-        steps.add(new SnapshotStep(config, targetDs, sourceDriver));
-
-        StepResult result = new MigrationPipeline(steps).run(ctx);
-
+        TaskMeta meta = taskManager.createInteractive(taskName, "snapshot", sourceDriver.type());
         try {
+            meta.setArgs(java.util.Arrays.asList(args.getSourceArgs()));
+            TaskMeta.SourceInfo src = meta.getSource();
+            src.setHost(config.getSource().getHost());
+            src.setPort(config.getSource().getPort());
+            src.setDatabase(databases != null && !databases.isEmpty() ? databases.get(0) : "");
+            TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+            tgt.setType("tidb");
+            tgt.setHost(config.getTarget().getHost());
+            tgt.setPort(config.getTarget().getPort());
+            tgt.setDatabase("");
+            meta.setTarget(tgt);
+            taskManager.writeMeta(taskName, meta);
+
+            App.resolveTaskPaths(taskName, taskManager, ctx);
+            ctx.put("taskManager", taskManager);
+            ctx.put("taskName", taskName);
+
+            List<MigrationStep> steps = new ArrayList<>();
+            steps.add(new PreCheckStep(config, sourceDriver));
+            steps.add(new SnapshotStep(config, targetDs, sourceDriver));
+
+            StepResult result = new MigrationPipeline(steps).run(ctx);
+
             if (!result.isFatal()) {
                 meta.markSuccess();
             } else {
                 meta.markFailed(result.message());
             }
             taskManager.writeMeta(taskName, meta);
+
+            App.handleResult(result, ctx);
+        } catch (Exception e) {
+            try {
+                meta.markFailed(e.getMessage());
+                taskManager.writeMeta(taskName, meta);
+            } catch (Exception ignored) {}
+            throw e;
         } finally {
+            MDC.remove("task");
             taskManager.unlock();
         }
-
-        App.handleResult(result, ctx);
     }
 }

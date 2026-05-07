@@ -4,15 +4,12 @@ import com.tool.common.model.ColumnSchema;
 import com.tool.common.model.ConversionResult;
 import com.tool.common.model.IndexSchema;
 import com.tool.common.model.TableSchema;
-import org.springframework.stereotype.Component;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-@Component
 public class SchemaConverter {
 
     private final TypeMapper typeMapper;
@@ -26,10 +23,10 @@ public class SchemaConverter {
         StringBuilder sb = new StringBuilder();
 
         if (table.isPartitioned()) {
-            result.addWarning("partitioned table detected, converted to regular table");
+            result.addWarning("table modified", "detail", "partitioned→regular");
         }
         if (table.getForeignKeyCount() > 0) {
-            result.addWarning(table.getForeignKeyCount() + " foreign key(s) discarded");
+            result.addWarning("fk discarded", "count", String.valueOf(table.getForeignKeyCount()));
         }
 
         if (dropIfExists) {
@@ -55,11 +52,19 @@ public class SchemaConverter {
         // Columns — second pass: build column definitions
         for (ColumnSchema col : table.getColumns()) {
             if (col.isComputed()) {
-                result.addWarning("column '" + col.getName() + "': computed column (AS expr) converted to plain column — verify definition manually");
+                result.addWarning("computed column", "col", col.getName(),
+                        "detail", "converted to plain, verify manually");
             }
             TypeMapper.MappedType mapped = typeMapper.mapType(col);
             if (mapped.hasWarning()) {
-                result.addWarning("column '" + col.getName() + "': " + mapped.warningMessage());
+                if (mapped.warningMessage() != null && !mapped.warningMessage().isEmpty()) {
+                    result.addWarning("type mapped", "col", col.getName(),
+                            "src", col.getSourceType(), "tidb", mapped.tidbType(),
+                            "note", mapped.warningMessage());
+                } else {
+                    result.addWarning("type mapped", "col", col.getName(),
+                            "src", col.getSourceType(), "tidb", mapped.tidbType());
+                }
             }
 
             StringBuilder colDef = new StringBuilder();
@@ -89,8 +94,8 @@ public class SchemaConverter {
                     defaultVal = "CURDATE()";
                 } else if (tidbType.equals("TIME")) {
                     // TiDB does not support function-based defaults for TIME; drop the default
-                    result.addWarning("column '" + col.getName() + "': TIME column default '" + rawDefault
-                            + "' cannot be expressed as a TiDB function default — default dropped");
+                    result.addWarning("default dropped", "col", col.getName(), "type", "TIME",
+                            "detail", rawDefault != null ? rawDefault.trim() : "function");
                     defaultVal = null;
                 } else if (tidbType.equals("DATETIME") && defaultVal != null && defaultVal.startsWith("CURRENT_TIMESTAMP(")) {
                     // DATETIME (no precision) cannot use CURRENT_TIMESTAMP(n); strip precision
@@ -100,8 +105,8 @@ public class SchemaConverter {
             // TiDB does not support UTC_TIMESTAMP() as a column DEFAULT expression;
             // fall back to CURRENT_TIMESTAMP (or CURRENT_TIMESTAMP(n) for datetime2 columns)
             if ("UTC_TIMESTAMP()".equals(defaultVal)) {
-                result.addWarning("column '" + col.getName() + "': UTC_TIMESTAMP() is not supported as a TiDB DEFAULT — "
-                        + "falling back to CURRENT_TIMESTAMP (local time, not UTC)");
+                result.addWarning("default replaced", "col", col.getName(),
+                        "from", "UTC_TIMESTAMP()", "to", "CURRENT_TIMESTAMP", "note", "UTC→local");
                 if (datetimePrecision > 0) {
                     defaultVal = "CURRENT_TIMESTAMP(" + datetimePrecision + ")";
                 } else {
@@ -109,7 +114,7 @@ public class SchemaConverter {
                 }
             }
             if ("UUID()".equals(defaultVal)) {
-                result.addWarning("column '" + col.getName() + "': UUID() is not supported as a TiDB DEFAULT expression — default dropped");
+                result.addWarning("default dropped", "col", col.getName(), "detail", "UUID() unsupported");
                 defaultVal = null;
             }
             // BLOB/TEXT/JSON/LONGTEXT/LONGBLOB columns cannot have a default value in TiDB/MySQL
@@ -119,8 +124,7 @@ public class SchemaConverter {
                         baseType.equals("TEXT") || baseType.equals("BLOB") ||
                         baseType.equals("MEDIUMTEXT") || baseType.equals("MEDIUMBLOB") ||
                         baseType.equals("JSON")) {
-                    result.addWarning("column '" + col.getName() + "': " + baseType
-                            + " column cannot have a default value in TiDB — default dropped");
+                    result.addWarning("default dropped", "col", col.getName(), "type", baseType);
                     defaultVal = null;
                 }
             }
@@ -132,28 +136,28 @@ public class SchemaConverter {
                         defaultVal.equals("CURDATE()") ||
                         defaultVal.equals("UUID()");
                 if (!isKnownSafeFunction) {
-                    result.addWarning("column '" + col.getName() + "': default value '"
-                            + rawDefault.trim() + "' contains a function not supported as a TiDB DEFAULT — default dropped");
+                    result.addWarning("default dropped", "col", col.getName(),
+                            "detail", rawDefault != null ? rawDefault.trim() : "function");
                     defaultVal = null;
                 }
             }
             // Drop numeric/boolean literal defaults on temporal columns — TiDB rejects them ([1067])
             if (defaultVal != null && isTemporalTidbType(tidbType) && isNumericLiteral(defaultVal)) {
-                result.addWarning("column '" + col.getName() + "': numeric default '" + defaultVal
-                        + "' is not valid for " + tidbType + " column — default dropped");
+                result.addWarning("default dropped", "col", col.getName(),
+                        "value", defaultVal, "type", tidbType);
                 defaultVal = null;
             }
             // Drop empty/blank string defaults on temporal columns — TiDB rejects them ([1067])
             if (defaultVal != null && isTemporalTidbType(tidbType) && isEmptyStringLiteral(defaultVal)) {
-                result.addWarning("column '" + col.getName() + "': empty string default is not valid for "
-                        + tidbType + " column — default dropped");
+                result.addWarning("default dropped", "col", col.getName(),
+                        "type", tidbType, "detail", "empty string");
                 defaultVal = null;
             }
             // Drop empty-string defaults on numeric columns — source database silently coerces '' to 0,
             // but TiDB rejects them with [1067] Invalid default value ([1067])
             if (defaultVal != null && isNumericTidbType(tidbType) && isEmptyStringLiteral(defaultVal)) {
-                result.addWarning("column '" + col.getName() + "': empty string default is not valid for "
-                        + tidbType + " column (source coerces '' to 0) — default dropped");
+                result.addWarning("default dropped", "col", col.getName(),
+                        "type", tidbType, "detail", "''→0");
                 defaultVal = null;
             }
             if (defaultVal != null && !col.isIdentity()) {
@@ -178,7 +182,7 @@ public class SchemaConverter {
 
         // Check constraints — TiDB disables check enforcement by default, discard them
         if (!table.getCheckConstraints().isEmpty()) {
-            result.addWarning(table.getCheckConstraints().size() + " CHECK constraint(s) discarded (TiDB does not enforce CHECK by default)");
+            result.addWarning("check discarded", "count", String.valueOf(table.getCheckConstraints().size()));
         }
 
         sb.append(String.join(",\n", parts));
@@ -195,38 +199,38 @@ public class SchemaConverter {
 
     private String buildIndexDDL(String tableName, IndexSchema idx, ConversionResult result, TableSchema table) {
         if (idx.isFulltext()) {
-            result.addWarning("FULLTEXT index '" + idx.getName() + "' discarded — not supported in TiDB");
+            result.addWarning("index dropped", "name", idx.getName(), "reason", "FULLTEXT");
             return null;
         }
         if (idx.isColumnstore()) {
-            result.addWarning("COLUMNSTORE index '" + idx.getName() + "' discarded — not supported in TiDB");
+            result.addWarning("index dropped", "name", idx.getName(), "reason", "COLUMNSTORE");
             return null;
         }
         if (idx.getColumns() == null || idx.getColumns().isEmpty()) return null;
 
         if (idx.isClustered()) {
-            result.addWarning("CLUSTERED index '" + idx.getName() + "' converted to regular INDEX");
+            result.addWarning("index modified", "name", idx.getName(), "detail", "CLUSTERED→regular");
         }
         if (idx.getIncludeColumns() != null && !idx.getIncludeColumns().isEmpty()) {
-            result.addWarning("index '" + idx.getName() + "': INCLUDE columns dropped — not supported in TiDB");
+            result.addWarning("index modified", "name", idx.getName(), "detail", "INCLUDE dropped");
         }
         if (idx.getFilterDefinition() != null) {
-            result.addWarning("index '" + idx.getName() + "': WHERE filter dropped — filtered indexes not supported in TiDB");
+            result.addWarning("index modified", "name", idx.getName(), "detail", "WHERE filter dropped");
         }
 
         // Key-length guard: TiDB/InnoDB limit is 3072 bytes for utf8mb4 (4 bytes/char)
         if (table != null) {
             int estimatedKeyBytes = estimateIndexKeyBytes(idx, table);
             if (estimatedKeyBytes > 3072) {
-                result.addWarning("index '" + idx.getName() + "': estimated key size " + estimatedKeyBytes
-                        + " bytes exceeds TiDB 3072-byte limit — index dropped to prevent Error 1071. "
-                        + "Consider reducing column lengths or splitting the index.");
+                result.addWarning("index dropped", "name", idx.getName(),
+                        "key", estimatedKeyBytes + "B", "limit", "3072B");
                 return null;
             }
         }
 
+        String idxName = truncateIdentifier(idx.getName(), tableName, idx, result);
         String uniqueKeyword = idx.isUnique() ? "UNIQUE " : "";
-        return "CREATE " + uniqueKeyword + "INDEX `" + idx.getName() + "` ON `" + tableName + "` ("
+        return "CREATE " + uniqueKeyword + "INDEX `" + idxName + "` ON `" + tableName + "` ("
                 + quoteCols(idx.getColumns()) + ");";
     }
 
@@ -315,5 +319,23 @@ public class SchemaConverter {
     private static boolean isEmptyStringLiteral(String val) {
         String t = val.trim();
         return t.equals("''") || t.equals("\"\"");
+    }
+
+    /** TiDB max identifier length (both table and index names). */
+    private static final int MAX_IDENTIFIER_LENGTH = 64;
+
+    /**
+     * Truncate an identifier (index/constraint name) that exceeds TiDB's 64-char limit.
+     * Keeps the first 50 chars and appends a 13-char hex hash of the original to avoid collisions.
+     */
+    private String truncateIdentifier(String name, String tableName, IndexSchema idx, ConversionResult result) {
+        if (name.length() <= MAX_IDENTIFIER_LENGTH) {
+            return name;
+        }
+        String hash = Integer.toHexString(name.hashCode());
+        // Keep prefix at 50 chars max so prefix + "_" + hash fits in 64
+        String truncated = name.substring(0, Math.min(50, MAX_IDENTIFIER_LENGTH - hash.length() - 1)) + "_" + hash;
+        result.addWarning("index truncated", "from", name, "to", truncated);
+        return truncated;
     }
 }

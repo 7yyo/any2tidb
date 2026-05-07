@@ -55,7 +55,7 @@ class DumpIntegrationTest {
         SqlServerExtractor extractor = new SqlServerExtractor();
         SqlServerDumpExtractor dumpExtractor = new SqlServerDumpExtractor(extractor);
         SqlServerTypeMapper typeMapper = new SqlServerTypeMapper();
-        SqlServerSchemaVerifier verifier = new SqlServerSchemaVerifier(typeMapper);
+        SqlServerSchemaVerifier verifier = new SqlServerSchemaVerifier();
         driver = new SqlServerDriver(extractor, dumpExtractor, typeMapper, verifier, config);
 
         // Drop TiDB database from previous run (keep after test for inspection)

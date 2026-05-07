@@ -206,7 +206,8 @@ public class TiDBBatchWriter {
             if (nowRemaining > 0 && System.currentTimeMillis() - lastLogMs >= 30_000) {
                 Log.info(log, "flushing",
                         "db", dbName,
-                        "remaining", nowRemaining + " batches, ~" + formatRows(nowRemaining * batchSize) + " rows",
+                        "batches", nowRemaining,
+                        "rows", nowRemaining * batchSize,
                         "elapsed", formatDuration(elapsed));
                 lastLogMs = System.currentTimeMillis();
             }

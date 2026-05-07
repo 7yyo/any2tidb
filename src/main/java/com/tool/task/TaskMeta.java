@@ -2,6 +2,7 @@ package com.tool.task;
 
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 public class TaskMeta {
     private String task;
@@ -16,6 +17,7 @@ public class TaskMeta {
     private Integer tables;
     private String error;
     private String pid;
+    private List<String> args;
 
     private static final DateTimeFormatter FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z");
@@ -62,6 +64,12 @@ public class TaskMeta {
         this.finishedAt = OffsetDateTime.now().format(FMT).toString();
     }
 
+    public void markCrashed(String err) {
+        this.status = "CRASHED";
+        this.error = err;
+        this.finishedAt = OffsetDateTime.now().format(FMT).toString();
+    }
+
     // Getters and setters
     public String getTask() { return task; }
     public void setTask(String task) { this.task = task; }
@@ -87,6 +95,8 @@ public class TaskMeta {
     public void setError(String error) { this.error = error; }
     public String getPid() { return pid; }
     public void setPid(String pid) { this.pid = pid; }
+    public List<String> getArgs() { return args; }
+    public void setArgs(List<String> args) { this.args = args; }
 
     public static class SourceInfo {
         private String type;

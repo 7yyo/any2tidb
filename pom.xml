@@ -117,6 +117,20 @@
                 <artifactId>maven-antrun-plugin</artifactId>
                 <executions>
                     <execution>
+                        <id>write-build-info</id>
+                        <phase>process-resources</phase>
+                        <goals><goal>run</goal></goals>
+                        <configuration>
+                            <target>
+                                <tstamp>
+                                    <format property="build.time" pattern="yyyy-MM-dd HH:mm:ss Z"/>
+                                </tstamp>
+                                <mkdir dir="${project.build.outputDirectory}"/>
+                                <echo file="${project.build.outputDirectory}/build.info">build.time=${build.time}</echo>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <id>copy-to-dist</id>
                         <phase>package</phase>
                         <goals><goal>run</goal></goals>

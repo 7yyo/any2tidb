@@ -83,11 +83,11 @@ public final class SqlServerCdcUtils {
      * to record the pre-dump LSN. The format matches Debezium's serialized
      * {@code HashMap<byte[], byte[]>} so SyncStep can read and verify it.
      */
-    public static void writeDebeziumOffset(String path, String dbName, String debeziumLsn)
+    public static void writeDebeziumOffset(String path, String driverType, String dbName, String debeziumLsn)
             throws IOException {
         // Engine name must match the "name" property set in DebeziumEngineFactory
-        // and SyncEngineFactory: "any2tidb-snapshot-" + dbName
-        String engineName = "any2tidb-snapshot-" + dbName;
+        // and SyncEngineFactory: driverType + "2tidb-" + dbName
+        String engineName = driverType + "2tidb-" + dbName;
         String keyJson = "[\"" + engineName + "\",{\"server\":\"any2tidb_"
                 + dbName + "\",\"database\":\"" + dbName + "\"}]";
         String valueJson = "{\"commit_lsn\":\"" + debeziumLsn

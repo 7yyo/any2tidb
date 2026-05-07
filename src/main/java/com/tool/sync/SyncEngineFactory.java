@@ -32,7 +32,7 @@ public class SyncEngineFactory {
             Consumer<Throwable> onComplete) {
 
         Properties props = new Properties();
-        props.setProperty("name", "any2tidb-snapshot-" + dbName);
+        props.setProperty("name", driver.type() + "2tidb-" + dbName);
         props.setProperty("connector.class", driver.debeziumConnectorClass());
         props.setProperty("database.hostname", source.getHost());
         props.setProperty("database.port", String.valueOf(source.getPort()));

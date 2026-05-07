@@ -24,22 +24,26 @@ public class TiDBWriter implements SchemaWriter {
      * is recorded — this prevents accidentally destroying existing rows.
      */
     public void executeDDL(Connection conn, String ddl, ConversionResult result) throws Exception {
-        String[] statements = ddl.split(";\n", -1);
+        // Only split for multi-statement table DDL (DROP TABLE IF EXISTS ...;\nCREATE TABLE ...).
+        // Functions, procedures, and triggers contain semicolons in their body and must be
+        // executed as a single statement.
+        boolean isMultiStatement = DROP_TABLE_PATTERN.matcher(ddl).find();
+        String[] statements = isMultiStatement ? ddl.split(";\n", -1) : new String[]{ddl};
 
-        // Safety check: if the first real statement is DROP TABLE IF EXISTS, verify the
-        // table is empty before proceeding.
-        for (String raw : statements) {
-            String sql = raw.trim();
-            if (sql.isEmpty()) continue;
-            Matcher m = DROP_TABLE_PATTERN.matcher(sql);
-            if (m.find()) {
-                String tableName = m.group(1);
-                if (tableHasData(conn, tableName)) {
-                    result.setSkip("table `" + tableName + "` is not empty — DROP skipped, DDL not applied");
-                    return;
+        if (isMultiStatement) {
+            for (String raw : statements) {
+                String sql = raw.trim();
+                if (sql.isEmpty()) continue;
+                Matcher m = DROP_TABLE_PATTERN.matcher(sql);
+                if (m.find()) {
+                    String tableName = m.group(1);
+                    if (tableHasData(conn, tableName)) {
+                        result.setSkip("table `" + tableName + "` is not empty — DROP skipped, DDL not applied");
+                        return;
+                    }
                 }
+                break; // only inspect the first non-empty statement
             }
-            break; // only inspect the first non-empty statement
         }
 
         try (Statement stmt = conn.createStatement()) {
@@ -49,8 +53,10 @@ public class TiDBWriter implements SchemaWriter {
                 stmt.execute(sql);
             }
         } catch (SQLException e) {
+            String msg = e.getMessage() != null
+                    ? e.getMessage().replace('\n', ' ').replace('\r', ' ') : "null";
             result.setError(String.format("failed to execute DDL: [%s/%d] %s",
-                    e.getSQLState(), e.getErrorCode(), e.getMessage()));
+                    e.getSQLState(), e.getErrorCode(), msg));
         }
     }
 

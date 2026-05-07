@@ -78,7 +78,8 @@ public class PreCheckStep implements MigrationStep {
                     config.getSource().getPassword())) {
                 sourceDriver.consistencyProvider().checkPrerequisites(c);
             } catch (Exception e) {
-                return StepResult.fatal(e.getMessage());
+                String msg = e.getMessage();
+                return StepResult.fatal(msg != null ? msg.replace('\n', ' ').replace('\r', ' ') : null);
             }
         }
 
@@ -97,7 +98,8 @@ public class PreCheckStep implements MigrationStep {
             }
             return null;
         } catch (Exception e) {
-            return e.getMessage();
+            String msg = e.getMessage();
+            return msg != null ? msg.replace('\n', ' ').replace('\r', ' ') : null;
         }
     }
 

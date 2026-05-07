@@ -37,8 +37,7 @@ public class TaskManager {
         Path taskDir = tasksRoot.resolve(taskName);
         if (Files.exists(taskDir)) {
             if (System.console() == null) {
-                throw new IllegalArgumentException("Task '" + taskName + "' already exists. " +
-                        "Use a different name or delete the existing task first.");
+                return reopen(taskName);
             }
             TaskMeta existing = readMeta(taskName);
             printTaskInfo(existing);
@@ -130,6 +129,34 @@ public class TaskManager {
             lockChannel.close();
             throw new TaskLockedException(taskName, getLockPid(taskDir));
         }
+    }
+
+    /**
+     * Re-acquires the lock, writes a new PID, and sets the task back to RUNNING.
+     * Used by the daemon child process when restarting a crashed task — the
+     * old process is gone (OS released its lock), so acquiring succeeds.
+     */
+    public TaskMeta reopen(String taskName) throws Exception {
+        Path taskDir = tasksRoot.resolve(taskName);
+        if (!Files.exists(taskDir)) {
+            throw new IllegalArgumentException("Task not found: " + taskName);
+        }
+        acquireLock(taskDir, taskName);
+        String pid = String.valueOf(ProcessHandle.current().pid());
+        Files.writeString(taskDir.resolve(".internal/.pid"), pid);
+
+        TaskMeta meta = readMeta(taskName);
+        meta.setPid(pid);
+        meta.setStatus("RUNNING");
+        meta.setError(null);
+        meta.setFinishedAt(null);
+        meta.setStartedAt(java.time.OffsetDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z"))
+                .toString());
+
+        dbManager.update(meta);
+        dbManager.addHistory(taskName, "RESTART", null);
+        return meta;
     }
 
     public TaskMeta readMeta(String taskName) throws Exception {

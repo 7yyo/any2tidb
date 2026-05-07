@@ -454,7 +454,7 @@ public class SnapshotStep implements MigrationStep {
             String debeziumLsn = com.tool.source.sqlserver.SqlServerCdcUtils.hexLsnToDebezium(hexLsn);
             String offsetPath = snapshotConfig.offsetStoragePath() + "/" + dbName + ".offset";
             String historyPath = snapshotConfig.schemaHistoryPath() + "/" + dbName + ".history";
-            com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, dbName, debeziumLsn);
+            com.tool.source.sqlserver.SqlServerCdcUtils.writeDebeziumOffset(offsetPath, sourceDriver.type(), dbName, debeziumLsn);
             writeMinimalHistory(historyPath, dbName, debeziumLsn);
             Log.info(log, "offset written for empty database", "db", dbName,
                     "lsn", debeziumLsn);

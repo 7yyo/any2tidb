@@ -1,66 +1,33 @@
 package com.tool.schema.verifier;
 
-import static com.tool.common.SqlUtils.escapeBracket;
-
-import org.springframework.stereotype.Component;
-
 import java.sql.*;
 import java.util.*;
 
-@Component
-public class SqlServerSchemaVerifier implements SchemaVerifier {
+public class MySqlSchemaVerifier implements SchemaVerifier {
 
     @Override
     public VerifyResult verify(Connection srcConn, Connection tidbConn,
                                String schema, String tableName) throws SQLException {
         String fullName = schema + "." + tableName;
-        String objectId = "[" + escapeBracket(schema) + "].[" + escapeBracket(tableName) + "]";
         VerifyResult.Builder b = VerifyResult.builder(fullName);
 
-        // ---- Source columns ----
+        // Source columns
         List<String> srcCols = new ArrayList<>();
         try (PreparedStatement ps = srcConn.prepareStatement(
-                "SELECT c.name FROM sys.columns c " +
-                "JOIN sys.objects o ON c.object_id = o.object_id " +
-                "WHERE o.name = ? AND o.schema_id = SCHEMA_ID(?) " +
-                "ORDER BY c.column_id")) {
-            ps.setString(1, tableName);
-            ps.setString(2, schema);
+                "SELECT column_name FROM information_schema.COLUMNS " +
+                "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position")) {
+            ps.setString(1, schema);
+            ps.setString(2, tableName);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) srcCols.add(rs.getString(1));
             }
         }
 
-        // ---- Source PK ----
-        List<String> srcPk = new ArrayList<>();
-        try (PreparedStatement ps = srcConn.prepareStatement(
-                "SELECT c.name FROM sys.index_columns ic " +
-                "JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id " +
-                "JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id " +
-                "WHERE i.is_primary_key = 1 AND i.object_id = OBJECT_ID(?) " +
-                "ORDER BY ic.key_ordinal")) {
-            ps.setString(1, objectId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) srcPk.add(rs.getString(1));
-            }
-        }
-
-        // ---- Source auto-increment ----
-        String srcAi = null;
-        try (PreparedStatement ps = srcConn.prepareStatement(
-                "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?) AND is_identity = 1")) {
-            ps.setString(1, objectId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) srcAi = rs.getString(1);
-            }
-        }
-
-        // ---- TiDB side ----
-        DatabaseMetaData meta = tidbConn.getMetaData();
-        String catalog = tidbConn.getCatalog();
-
+        // TiDB columns + auto-increment
         List<String> tidbCols = new ArrayList<>();
         String tidbAi = null;
+        DatabaseMetaData meta = tidbConn.getMetaData();
+        String catalog = tidbConn.getCatalog();
         try (ResultSet rs = meta.getColumns(catalog, null, tableName, null)) {
             while (rs.next()) {
                 tidbCols.add(rs.getString("COLUMN_NAME"));
@@ -68,6 +35,7 @@ public class SqlServerSchemaVerifier implements SchemaVerifier {
             }
         }
 
+        // TiDB PK
         List<String> tidbPk = new ArrayList<>();
         Map<Short, String> pkMap = new TreeMap<>();
         try (ResultSet rs = meta.getPrimaryKeys(catalog, null, tableName)) {
@@ -77,7 +45,32 @@ public class SqlServerSchemaVerifier implements SchemaVerifier {
         }
         tidbPk.addAll(pkMap.values());
 
-        // ---- Checks ----
+        // MySQL PK — same INFORMATION_SCHEMA approach
+        List<String> srcPk = new ArrayList<>();
+        try (PreparedStatement ps = srcConn.prepareStatement(
+                "SELECT column_name FROM information_schema.KEY_COLUMN_USAGE " +
+                "WHERE table_schema = ? AND table_name = ? AND constraint_name = 'PRIMARY' " +
+                "ORDER BY ordinal_position")) {
+            ps.setString(1, schema);
+            ps.setString(2, tableName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) srcPk.add(rs.getString(1));
+            }
+        }
+
+        // MySQL auto-increment
+        String srcAi = null;
+        try (PreparedStatement ps = srcConn.prepareStatement(
+                "SELECT column_name FROM information_schema.COLUMNS " +
+                "WHERE table_schema = ? AND table_name = ? AND extra LIKE '%auto_increment%'")) {
+            ps.setString(1, schema);
+            ps.setString(2, tableName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) srcAi = rs.getString(1);
+            }
+        }
+
+        // Checks
         b.check("columns", srcCols.equals(tidbCols),
                 "[" + String.join(", ", srcCols) + "]", "[" + String.join(", ", tidbCols) + "]");
 

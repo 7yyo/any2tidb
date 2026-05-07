@@ -14,6 +14,7 @@ import com.tool.task.TaskManager;
 import com.tool.task.TaskMeta;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.boot.ApplicationArguments;
 
 import javax.sql.DataSource;
@@ -34,6 +35,9 @@ class SyncRunner {
     }
 
     void run(ApplicationArguments args) throws Exception {
+        String taskName = App.resolveTaskName(args, sourceDriver.type(), "sync");
+        MDC.put("task", taskName);
+
         Logger log = LoggerFactory.getLogger(App.class);
         Log.info(log, "Welcome to any2tidb v1.0.0 — Any DB → TiDB Migration Tool");
         Log.info(log, "Connection info",
@@ -42,31 +46,13 @@ class SyncRunner {
                 "mode", "sync");
 
         int pollIntervalMs = App.parseIntOption(args, "poll-interval-ms", SyncConfig.DEFAULT_POLL_INTERVAL_MS);
-        String offsetStoragePath = args.containsOption("offset-storage-path")
-                ? args.getOptionValues("offset-storage-path").get(0) : null;
-        String schemaHistoryPath = args.containsOption("schema-history-path")
-                ? args.getOptionValues("schema-history-path").get(0) : null;
-        String metaFile = args.containsOption("meta-file")
-                ? args.getOptionValues("meta-file").get(0) : SyncConfig.DEFAULT_META_FILE;
 
         SyncConfig syncConfig = SyncConfig.defaults()
-                .withPollIntervalMs(pollIntervalMs)
-                .withMetaFile(metaFile);
-        if (offsetStoragePath != null) syncConfig = syncConfig.withOffsetStoragePath(offsetStoragePath);
-        if (schemaHistoryPath != null) syncConfig = syncConfig.withSchemaHistoryPath(schemaHistoryPath);
+                .withPollIntervalMs(pollIntervalMs);
 
         StepContext ctx = new StepContext();
         ctx.put("dryRun", false);
         ctx.put("syncConfig", syncConfig);
-
-        // Task support — mandatory
-        if (!args.containsOption("task") || args.getOptionValues("task").isEmpty()) {
-            throw new IllegalArgumentException("--task=NAME is required");
-        }
-        String taskName = args.getOptionValues("task").get(0);
-        if (taskName == null || taskName.isBlank()) {
-            throw new IllegalArgumentException("--task=NAME requires a non-empty name");
-        }
 
         // ── from-task: validate BEFORE creating the sync task ──
         if (!args.containsOption("from-task") || args.getOptionValues("from-task").isEmpty()) {
@@ -92,44 +78,45 @@ class SyncRunner {
                     + ", offsets may be incomplete");
         }
 
-        TaskMeta meta = taskManager.createInteractive(taskName, "sync", "sqlserver");
-        meta.setFromTask(fromTask);
-        TaskMeta.SourceInfo src = meta.getSource();
-        src.setHost(config.getSource().getHost());
-        src.setPort(config.getSource().getPort());
-        src.setDatabase("");
-        TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
-        tgt.setType("tidb");
-        tgt.setHost(config.getTarget().getHost());
-        tgt.setPort(config.getTarget().getPort());
-        tgt.setDatabase("");
-        meta.setTarget(tgt);
-
-        ctx.put("offsetStoragePath", fromDir.resolve("offsets").toString());
-        ctx.put("schemaHistoryPath", fromDir.resolve("history").toString());
-        syncConfig = syncConfig.withMetaFile(fromDir.resolve("snapshot-meta.json").toString());
-
-        taskManager.writeMeta(taskName, meta);
-
-        String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
-        String taskHistoryPath = ctx.get("schemaHistoryPath", String.class);
-        if (taskOffsetPath != null) {
-            syncConfig = syncConfig.withOffsetStoragePath(taskOffsetPath);
-        }
-        if (taskHistoryPath != null) {
-            syncConfig = syncConfig.withSchemaHistoryPath(taskHistoryPath);
-        }
-        ctx.put("syncConfig", syncConfig);
-        ctx.put("taskManager", taskManager);
-        ctx.put("taskName", taskName);
-
-        List<MigrationStep> steps = new ArrayList<>();
-        steps.add(new PreCheckStep(config, sourceDriver));
-        steps.add(new SyncStep(config, targetDs, sourceDriver));
-
-        StepResult result = new MigrationPipeline(steps).run(ctx);
-
+        TaskMeta meta = taskManager.createInteractive(taskName, "sync", sourceDriver.type());
         try {
+            meta.setArgs(java.util.Arrays.asList(args.getSourceArgs()));
+            meta.setFromTask(fromTask);
+            TaskMeta.SourceInfo src = meta.getSource();
+            src.setHost(config.getSource().getHost());
+            src.setPort(config.getSource().getPort());
+            src.setDatabase("");
+            TaskMeta.TargetInfo tgt = new TaskMeta.TargetInfo();
+            tgt.setType("tidb");
+            tgt.setHost(config.getTarget().getHost());
+            tgt.setPort(config.getTarget().getPort());
+            tgt.setDatabase("");
+            meta.setTarget(tgt);
+
+            ctx.put("offsetStoragePath", fromDir.resolve(".internal/offsets").toString());
+            ctx.put("schemaHistoryPath", fromDir.resolve(".internal/history").toString());
+            syncConfig = syncConfig.withMetaFile(fromDir.resolve("snapshot-meta.json").toString());
+
+            taskManager.writeMeta(taskName, meta);
+
+            String taskOffsetPath = ctx.get("offsetStoragePath", String.class);
+            String taskHistoryPath = ctx.get("schemaHistoryPath", String.class);
+            if (taskOffsetPath != null) {
+                syncConfig = syncConfig.withOffsetStoragePath(taskOffsetPath);
+            }
+            if (taskHistoryPath != null) {
+                syncConfig = syncConfig.withSchemaHistoryPath(taskHistoryPath);
+            }
+            ctx.put("syncConfig", syncConfig);
+            ctx.put("taskManager", taskManager);
+            ctx.put("taskName", taskName);
+
+            List<MigrationStep> steps = new ArrayList<>();
+            steps.add(new PreCheckStep(config, sourceDriver));
+            steps.add(new SyncStep(config, targetDs, sourceDriver));
+
+            StepResult result = new MigrationPipeline(steps).run(ctx);
+
             if (result.isFatal()) {
                 meta.markFailed(result.message());
             } else if (Boolean.TRUE.equals(ctx.get("stopped", Boolean.class))) {
@@ -138,10 +125,17 @@ class SyncRunner {
                 meta.markSuccess();
             }
             taskManager.writeMeta(taskName, meta);
+
+            App.handleResult(result, ctx);
+        } catch (Exception e) {
+            try {
+                meta.markFailed(e.getMessage());
+                taskManager.writeMeta(taskName, meta);
+            } catch (Exception ignored) {}
+            throw e;
         } finally {
+            MDC.remove("task");
             taskManager.unlock();
         }
-
-        App.handleResult(result, ctx);
     }
 }

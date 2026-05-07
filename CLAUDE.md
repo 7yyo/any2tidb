@@ -86,5 +86,31 @@
 - 写代码前先查文档/验证 API 用法，不要凭记忆猜测
 - **声称代码状态前必须 grep/Read 验证**，不要靠 git log/commit message 推断。commit message 能骗人，代码不会
 - **共享条件块要逐个模式验证**：help 文本、if 分支、共享配置——每个使用方独立确认，不假设共用 = 各方都消费
-- memory 只沉淀有价值的、跨 session 的洞察，不灌原始笔记
-- **项目知识库**: seekdb `any2tidb` 数据库 (localhost:2881)，存架构决策、session 日志、深度参考。重大决策和收尾时同步写入。
+- **记忆系统 = mem0 Platform**: 通过 MCP server 提供跨 session 记忆。云端托管，API key 配置在 `~/.claude/settings.json` 的 `mcpServers.mem0` 中。MCP tools: `add_memory`, `search_memories`, `get_memories`, `update_memory`, `delete_memory`, `delete_all_memories`。无需本地进程/数据库。
+
+## 开发原则 (2026-05-06 实战教训)
+
+### 第三方库不可信任
+- 任何第三方依赖的边界行为都要设 **timeout + fallback**，不假设它一定返回
+- 异步库的异常可能被内部吞掉（如 Debezium `RetriableException` 无限重试），不能只靠 `catch` 兜底
+- 可以对上游提 PR，但不能等——先在我们侧做 workaround
+
+### 错误消息必须可追溯
+- 每条 error log 必须回答：**在哪发生、涉及哪个对象、用户可以怎么处理**
+- 错误消息里必须有定位信息（表名、库名、SQL 文本）
+- 禁止 "CDC check failed" 这种不带表名的错误
+
+### 等待循环必须有进度信号
+- 任何 `while (!done)` 或 `CountDownLatch.await` 循环必须定期打 "still waiting" 日志
+- 用户从外部看，静默 = 卡死
+- 超时后不要只报错误——尝试自动 fallback
+
+### 默认行为对新手友好
+- CLI 能不要求的手动步骤就不要要求（如 `--daemon` 不应强制 `--task`）
+- 能自动生成的参数就自动生成，需要自定义时再显式指定
+- 如果某个参数是必填的，一定有充分的理由，而不是"实现方便"
+
+### 日志分层
+- `com.tool` = INFO（我们的日志，默认可见）
+- 第三方库 = WARN（默认只输出警告和错误，防止噪音淹没我们的日志）
+- `--log-level=DEBUG` 时第三方库降级到 DEBUG

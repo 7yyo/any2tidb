@@ -1,6 +1,9 @@
 package com.tool.schema.extractor;
 
+import com.tool.common.model.ConversionResult;
 import com.tool.common.model.TableSchema;
+import com.tool.schema.converter.SchemaConverter;
+import com.tool.schema.converter.TypeMapper;
 
 import java.sql.Connection;
 import java.util.List;
@@ -44,4 +47,32 @@ public interface SchemaExtractor {
      * Returns an empty list if the table has no primary key.
      */
     List<String> getPrimaryKeyColumns(Connection conn, String schema, String table) throws Exception;
+
+    /**
+     * Generate CREATE TABLE DDL for one table.
+     * Default: extract + convert pipeline (SQL Server path).
+     * Sources with native DDL (MySQL SHOW CREATE TABLE) override this.
+     */
+    default String generateCreateTableDDL(Connection conn, String schema, String table,
+                                          TypeMapper typeMapper, ConversionResult result,
+                                          boolean dropIfExists) throws Exception {
+        TableSchema ts = extractTable(conn, schema, table);
+        return new SchemaConverter(typeMapper).toCreateTableDDL(ts, result, dropIfExists);
+    }
+
+    // ── Views / Procedures / Functions / Triggers ─────────────────────────
+
+    default List<String> listViews(Connection conn, String database) throws Exception { return List.of(); }
+    default List<String> listProcedures(Connection conn, String database) throws Exception { return List.of(); }
+    default List<String> listFunctions(Connection conn, String database) throws Exception { return List.of(); }
+    default List<String> listTriggers(Connection conn, String database) throws Exception { return List.of(); }
+
+    default String generateViewDDL(Connection conn, String database, String view,
+                                   ConversionResult result) throws Exception { return null; }
+    default String generateProcedureDDL(Connection conn, String database, String proc,
+                                        ConversionResult result) throws Exception { return null; }
+    default String generateFunctionDDL(Connection conn, String database, String func,
+                                       ConversionResult result) throws Exception { return null; }
+    default String generateTriggerDDL(Connection conn, String database, String trigger,
+                                      ConversionResult result) throws Exception { return null; }
 }

@@ -39,19 +39,15 @@ public class SummaryPrinter {
 
         List<IssueRow> out = new ArrayList<>();
         for (VerifyResult r : results) {
-            if (r.isMismatch()) {
-                List<String> all = new ArrayList<>(r.diffLines());
-                if (r.hasKnownLoss()) all.addAll(r.knownLossLines());
-                String first = all.isEmpty() ? "schema mismatch" : all.get(0);
-                List<String> rest = all.size() > 1 ? all.subList(1, all.size()) : List.of();
-                out.add(new IssueRow(dbName, r.fullTableName(), "MISMATCH", first, rest));
-            } else if (r.hasKnownLoss()) {
-                List<String> loss = r.knownLossLines();
-                if (loss.isEmpty()) continue;
-                String first = loss.get(0);
-                List<String> rest = loss.size() > 1 ? loss.subList(1, loss.size()) : List.of();
-                out.add(new IssueRow(dbName, r.fullTableName(), "NOTE", first, rest));
-            }
+            if (r.isOk()) continue;
+            List<VerifyResult.Mismatch> mismatches = r.mismatches();
+            String first = mismatches.get(0).reason() + ": " + mismatches.get(0).src() + " → " + mismatches.get(0).tidb();
+            List<String> rest = mismatches.size() > 1
+                    ? mismatches.subList(1, mismatches.size()).stream()
+                        .map(m -> m.reason() + ": " + m.src() + " → " + m.tidb())
+                        .toList()
+                    : List.of();
+            out.add(new IssueRow(dbName, r.fullTableName(), "MISMATCH", first, rest));
         }
         return out;
     }
